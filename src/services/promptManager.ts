@@ -120,13 +120,16 @@ export class PromptManager {
       }
     }
 
-    // Add the full diff
-    parts.push('\n### Code Changes\n```diff\n' + diff + '\n```');
+    // Add the full diff with clear markers
+    parts.push('\n### Code Changes\n');
+    parts.push('The following is a unified diff showing the changes. Lines starting with "-" are removed, and lines starting with "+" are added. Hunk headers (@@ -start,len +start,len @@) provide line number context.');
+    parts.push('```diff\n' + diff + '\n```');
 
     // Add review request
     parts.push(
       '\n---\n' +
-      'Please provide a detailed code review based on the guidelines and context provided above.'
+      'Please perform a thorough code review. Focus on identifying potential bugs, security issues, and performance bottlenecks. ' +
+      'Be specific about which files and line numbers you are referring to.'
     );
 
     return parts.join('\n');

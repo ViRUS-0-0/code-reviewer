@@ -9,13 +9,23 @@
     "categories": [
         "Other"
     ],
-    "activationEvents": [],
+    "capabilities": {
+        "languageModelAccess": true
+    },
     "main": "./out/extension.js",
     "contributes": {
         "commands": [
             {
                 "command": "code-review.reviewChanges",
                 "title": "Code Review: Review Changes"
+            },
+            {
+                "command": "code-review.selectSource",
+                "title": "Code Review: Select Review Source"
+            },
+            {
+                "command": "code-review.setSource",
+                "title": "Code Review: Set Review Source"
             }
         ],
         "configuration": {
@@ -24,16 +34,27 @@
                 "code-review.aiProvider": {
                     "type": "string",
                     "enum": [
+                        "GitHub Copilot",
                         "OpenAI",
-                        "GitHub Copilot"
+                        "Gemini"
                     ],
-                    "default": "OpenAI",
-                    "description": "The AI provider to use for code reviews."
+                    "default": "GitHub Copilot",
+                    "description": "The AI provider to use for generating code reviews."
                 },
                 "code-review.openaiApiKey": {
                     "type": "string",
                     "default": "",
-                    "description": "Your OpenAI API Key (Required for OpenAI provider)"
+                    "description": "API Key for OpenAI. Required if AI Provider is set to OpenAI."
+                },
+                "code-review.geminiApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "API Key for Google Gemini. Required if AI Provider is set to Gemini."
+                },
+                "code-review.githubToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "GitHub Personal Access Token used to fetch PRs (leave blank to be prompted)"
                 },
                 "code-review.systemPrompt": {
                     "type": "string",
@@ -60,9 +81,22 @@
                     "type": "webview",
                     "id": "code-review-sidebar",
                     "name": "AI Code Review"
+                },
+                {
+                    "type": "webview",
+                    "id": "code-review-pr-selection",
+                    "name": "PR Selection"
                 }
             ]
-        }
+        },
+        "chatParticipants": [
+            {
+                "id": "code-review.agent",
+                "name": "code-review",
+                "description": "Expert code review agent that analyzes diffs and PRs.",
+                "isSticky": true
+            }
+        ]
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
@@ -80,6 +114,7 @@
         "typescript": "^4.9.5"
     },
     "dependencies": {
+        "@google/generative-ai": "^0.24.1",
         "@octokit/rest": "^20.0.0",
         "axios": "^1.3.4",
         "openai": "^4.0.0"

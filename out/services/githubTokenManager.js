@@ -33,6 +33,10 @@ class GitHubTokenManager {
      */
     async getToken() {
         try {
+            const configToken = vscode.workspace.getConfiguration('code-review').get('githubToken');
+            if (configToken && configToken.trim().length > 0) {
+                return configToken.trim();
+            }
             const token = await this.secretStorage.get(GitHubTokenManager.TOKEN_KEY);
             return token || null;
         }

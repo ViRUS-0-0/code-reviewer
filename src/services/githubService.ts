@@ -210,6 +210,53 @@ export class GitHubService {
   }
 
   /**
+   * Get the raw unified diff for a pull request
+   */
+  async getPRDiff(owner: string, repo: string, prNumber: number): Promise<string> {
+    return this.executeWithRetry(async () => {
+      const response = await this.client.get(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
+        headers: {
+          Accept: 'application/vnd.github.v3.diff',
+        },
+        responseType: 'text',
+      });
+      return response.data;
+    });
+  }
+
+  /**
+   * List pull requests for a repository
+   */
+  async listPullRequests(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', limit: number = 20): Promise<PRDetails[]> {
+    return this.executeWithRetry(async () => {
+      const response = await this.client.get(`/repos/${owner}/${repo}/pulls`, {
+        params: {
+          state,
+          per_page: Math.min(limit, 100),
+          sort: 'updated',
+          direction: 'desc',
+        },
+      });
+
+      return response.data.map((pr: any) => ({
+        number: pr.number,
+        title: pr.title,
+        body: pr.body || '',
+        state: pr.state,
+        author: pr.user.login,
+        createdAt: pr.created_at,
+        updatedAt: pr.updated_at,
+        url: pr.html_url,
+        headBranch: pr.head.ref,
+        baseBranch: pr.base.ref,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changedFiles: pr.changed_files,
+      }));
+    });
+  }
+
+  /**
    * Get files changed in a pull request
    */
   async getPRFiles(owner: string, repo: string, prNumber: number): Promise<PRFile[]> {

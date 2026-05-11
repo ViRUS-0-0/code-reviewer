@@ -1,0 +1,34 @@
+/* Styles for PR Selection webview */
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-background);
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+select {
+  font-family: inherit;
+}
+
+select:focus,
+input:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--vscode-button-background));
+}
+
+.error {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.warning {
+  color: var(--vscode-editorWarning-foreground, #dcdcaa);
+}

@@ -1,47 +1,92 @@
 import * as vscode from 'vscode';
 import { AIProvider } from './types';
 
+/**
+ * GitHub Copilot LM API Provider
+ * Uses the vscode.lm API to access GitHub Copilot models
+ */
 export class CopilotProvider implements AIProvider {
+  /**
+   * Generate a code review using GitHub Copilot
+   */
   async generateReview(userMessage: string, systemMessage?: string): Promise<string> {
     try {
-      // 1. Select the model. vscode.lm is the new API.
-      // We can filter for GPT-4 or use the default.
-      const models = await vscode.lm.selectChatModels({ family: 'gpt-4' });
+      console.log('Searching for AI models...');
       
-      let model;
-      if (models.length > 0) {
+      // 1. Try to get the best model (GPT-4o)
+      let models = await vscode.lm.selectChatModels({
+        vendor: 'github',
+        family: 'gpt-4o'
+      });
+      
+      let model: vscode.LanguageModelChat | undefined;
+      
+      if (models && models.length > 0) {
+        console.log(`Found GPT-4o model: ${models[0].id}`);
         model = models[0];
       } else {
-        // Fallback to any available chat model
-        const allModels = await vscode.lm.selectChatModels();
-        if (allModels.length > 0) {
-          model = allModels[0];
+        // 2. Fallback to any GitHub model
+        console.log('GPT-4o not found, falling back to any GitHub model...');
+        models = await vscode.lm.selectChatModels({ vendor: 'github' });
+        
+        if (models && models.length > 0) {
+          console.log(`Found GitHub model: ${models[0].id}`);
+          model = models[0];
+        } else {
+          // 3. Final fallback: Any available chat model
+          console.log('No GitHub models found, trying any available chat model...');
+          models = await vscode.lm.selectChatModels();
+          if (models && models.length > 0) {
+            console.log(`Found fallback model: ${models[0].id}`);
+            model = models[0];
+          }
         }
       }
 
       if (!model) {
-        throw new Error('No GitHub Copilot chat models available. Please ensure the GitHub Copilot Chat extension is installed and you are logged in.');
+        throw new Error(
+          'No AI models available in VS Code. Please ensure:\n' +
+          '1. GitHub Copilot Chat is installed and enabled\n' +
+          '2. You are signed in to GitHub\n' +
+          '3. You have an active subscription'
+        );
       }
 
-      const messages = [
-        vscode.LanguageModelChatMessage.Assistant(
-          systemMessage || 'You are an expert code reviewer performing a thorough code review.'
-        ),
-        vscode.LanguageModelChatMessage.User(userMessage),
+      console.log(`Using model: ${model.id} (${model.family} by ${model.vendor})`);
+
+      // Build messages
+      const fullPrompt = systemMessage
+        ? `SYSTEM INSTRUCTIONS:\n${systemMessage}\n\nUSER REQUEST:\n${userMessage}`
+        : userMessage;
+
+      const messages: vscode.LanguageModelChatMessage[] = [
+        vscode.LanguageModelChatMessage.User(fullPrompt),
       ];
 
-      const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+      const cancellationTokenSource = new vscode.CancellationTokenSource();
+
+      const response = await model.sendRequest(
+        messages,
+        {
+          justification: 'Generate a code review for changes in the workspace.',
+        },
+        cancellationTokenSource.token
+      );
 
       let result = '';
       for await (const fragment of response.text) {
         result += fragment;
       }
 
-      return result || 'No review generated.';
+      if (!result || result.trim().length === 0) {
+        throw new Error('AI returned an empty response');
+      }
+
+      return result;
     } catch (error: any) {
+      console.error('Error in CopilotProvider:', error);
       if (error instanceof vscode.LanguageModelError) {
-        console.error(`Language Model Error: ${error.message}, Code: ${error.code}`);
-        throw new Error(`GitHub Copilot Review failed: ${error.message}`);
+        throw new Error(`VS Code AI Error (${error.code}): ${error.message}`);
       }
       throw error;
     }
