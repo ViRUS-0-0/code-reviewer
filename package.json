@@ -1,0 +1,87 @@
+{
+    "name": "code-review",
+    "displayName": "Code Review AI",
+    "description": "AI-powered code review and knowledge indexing",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "code-review.reviewChanges",
+                "title": "Code Review: Review Changes"
+            }
+        ],
+        "configuration": {
+            "title": "Code Review AI",
+            "properties": {
+                "code-review.aiProvider": {
+                    "type": "string",
+                    "enum": [
+                        "OpenAI",
+                        "GitHub Copilot"
+                    ],
+                    "default": "OpenAI",
+                    "description": "The AI provider to use for code reviews."
+                },
+                "code-review.openaiApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Your OpenAI API Key (Required for OpenAI provider)"
+                },
+                "code-review.systemPrompt": {
+                    "type": "string",
+                    "default": "You are an expert backend engineer performing a code review. Focus on API contracts, performance, security, and data integrity.",
+                    "description": "Custom system prompt for the AI review"
+                }
+            }
+        },
+        "extensionDependencies": [
+            "github.copilot-chat"
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "code-review-explorer",
+                    "title": "Code Review",
+                    "icon": "$(search)"
+                }
+            ]
+        },
+        "views": {
+            "code-review-explorer": [
+                {
+                    "type": "webview",
+                    "id": "code-review-sidebar",
+                    "name": "AI Code Review"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "echo 'No linting yet'",
+        "test": "node ./out/test/runTest.js"
+    },
+    "devDependencies": {
+        "@types/mocha": "^10.0.1",
+        "@types/node": "16.x",
+        "@types/vscode": "^1.90.0",
+        "@vscode/test-electron": "^2.2.3",
+        "typescript": "^4.9.5"
+    },
+    "dependencies": {
+        "@octokit/rest": "^20.0.0",
+        "axios": "^1.3.4",
+        "openai": "^4.0.0"
+    }
+}
