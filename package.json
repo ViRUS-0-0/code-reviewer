@@ -71,7 +71,7 @@
                 {
                     "id": "code-review-explorer",
                     "title": "Code Review",
-                    "icon": "$(search)"
+                    "icon": "$(checklist)"
                 }
             ]
         },
