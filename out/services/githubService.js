@@ -236,17 +236,26 @@ class GitHubService {
     /**
      * Get issues linked to a pull request
      */
-    async getLinkedIssues(owner, repo, prNumber) {
+    async getLinkedIssues(owner, repo, prNumber, branchName) {
         return this.executeWithRetry(async () => {
             // Get PR details to extract linked issues from body
             const prResponse = await this.client.get(`/repos/${owner}/${repo}/pulls/${prNumber}`);
             const prBody = prResponse.data.body || '';
+            const prHeadBranch = branchName || prResponse.data.head.ref;
             // Simple regex to find issue references (e.g., #123, fixes #456)
             const issueRegex = /#(\d+)/g;
             const issueNumbers = new Set();
             let match;
+            // Extract from PR body
             while ((match = issueRegex.exec(prBody)) !== null) {
                 issueNumbers.add(parseInt(match[1], 10));
+            }
+            // Extract from branch name (e.g., feature/123-something or 123-fix)
+            if (prHeadBranch) {
+                const branchMatch = prHeadBranch.match(/(?:^|[\/\-_])(\d+)(?:$|[\/\-_])/);
+                if (branchMatch) {
+                    issueNumbers.add(parseInt(branchMatch[1], 10));
+                }
             }
             // Fetch details for each linked issue
             const issues = [];
@@ -254,9 +263,15 @@ class GitHubService {
                 try {
                     const issueResponse = await this.client.get(`/repos/${owner}/${repo}/issues/${issueNumber}`);
                     const issue = issueResponse.data;
+                    // GitHub API returns both PRs and issues via /issues endpoint
+                    // Ensure this is an actual issue, not a self-reference to the PR
+                    if (issue.pull_request) {
+                        continue;
+                    }
                     issues.push({
                         number: issue.number,
                         title: issue.title,
+                        body: issue.body || '',
                         state: issue.state,
                         url: issue.html_url,
                         createdAt: issue.created_at,

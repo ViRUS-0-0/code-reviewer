@@ -47,10 +47,13 @@ class PromptManager {
         }
         // Add linked GitHub issues
         if (issues && issues.length > 0) {
-            parts.push('\n### Linked Issues');
+            parts.push('\n### Linked Issues (Requirements)');
             for (const issue of issues) {
                 const issueLink = issue.url ? `[#${issue.number}](${issue.url})` : `#${issue.number}`;
-                parts.push(`- ${issueLink}: ${issue.title}`);
+                parts.push(`- **${issueLink}: ${issue.title}**`);
+                if (issue.body) {
+                    parts.push(`\n**Requirement Details for #${issue.number}:**\n${issue.body}\n`);
+                }
             }
         }
         // Add affected files list
@@ -67,7 +70,12 @@ class PromptManager {
         parts.push('```diff\n' + diff + '\n```');
         // Add review request
         parts.push('\n---\n' +
-            'Please perform a thorough code review. Focus on identifying potential bugs, security issues, and performance bottlenecks. ' +
+            '### Review Instructions\n' +
+            'Please perform a thorough code review. **Crucially, you must evaluate EVERY file listed in the "Affected Files" section above.**\n\n' +
+            'For each file:\n' +
+            '1. Identify potential bugs, logic errors, or security vulnerabilities.\n' +
+            '2. Suggest performance optimizations or better patterns where applicable.\n' +
+            '3. In your response, ensure the "fileBreakdown" array contains an entry for every single file mentioned, even if only to say "No issues found".\n\n' +
             'Be specific about which files and line numbers you are referring to.');
         return parts.join('\n');
     }

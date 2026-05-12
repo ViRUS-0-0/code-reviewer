@@ -27,13 +27,47 @@ class ReviewOrchestrator {
      */
     async generateReview(source, options = {}, onProgress) {
         try {
-            onProgress?.('Fetching diff...');
-            const diff = await this.fetchDiff(source);
-            if (!diff || diff.trim().length === 0) {
-                throw new Error('No changes detected to review');
+            let diffFiles = [];
+            let diff = '';
+            if (source.type === 'pr' && source.prNumber && source.repo && this.githubService) {
+                onProgress?.('Fetching PR files...');
+                const [owner, repoName] = source.repo.split('/');
+                const prFiles = await this.githubService.getPRFiles(owner, repoName, source.prNumber);
+                diffFiles = prFiles.map(file => {
+                    // Parse the patch to get hunks if available
+                    let hunks = [];
+                    if (file.patch) {
+                        // Create a dummy unified diff for this file to use the existing parser
+                        const fileDiff = `diff --git a/${file.filename} b/${file.filename}\n${file.patch}`;
+                        const parsed = diffProcessor_1.DiffProcessor.parseDiff(fileDiff);
+                        if (parsed.length > 0) {
+                            hunks = parsed[0].hunks;
+                        }
+                    }
+                    return {
+                        filename: file.filename,
+                        status: (file.status === 'removed' ? 'deleted' : file.status),
+                        additions: file.additions,
+                        deletions: file.deletions,
+                        hunks: hunks,
+                        importance: 0
+                    };
+                });
+                // Reconstruct unified diff string for the AI if it's within reasonable limits
+                diff = prFiles
+                    .filter(f => f.patch)
+                    .map(f => `diff --git a/${f.filename} b/${f.filename}\n${f.patch}`)
+                    .join('\n');
             }
-            onProgress?.('Parsing diff...');
-            const diffFiles = diffProcessor_1.DiffProcessor.parseDiff(diff);
+            else {
+                onProgress?.('Fetching diff...');
+                diff = await this.fetchDiff(source);
+                if (!diff || diff.trim().length === 0) {
+                    throw new Error('No changes detected to review');
+                }
+                onProgress?.('Parsing diff...');
+                diffFiles = diffProcessor_1.DiffProcessor.parseDiff(diff);
+            }
             if (diffFiles.length === 0) {
                 throw new Error('No files found in diff');
             }
@@ -110,8 +144,9 @@ class ReviewOrchestrator {
      * Build system and user prompts
      */
     async buildPrompts(source, diff, diffFiles, changeSummary, options) {
-        // Get PR details if available
+        // Get PR details and linked issues if available
         let prDetails;
+        let issues = [];
         if (source.type === 'pr' && source.prNumber && source.repo && this.githubService) {
             try {
                 const [owner, repo] = source.repo.split('/');
@@ -121,6 +156,19 @@ class ReviewOrchestrator {
                     description: ghPRDetails.body,
                     author: ghPRDetails.author,
                 };
+                // Fetch linked issues (from body and branch name)
+                try {
+                    const ghIssues = await this.githubService.getLinkedIssues(owner, repo, source.prNumber, ghPRDetails.headBranch);
+                    issues = ghIssues.map(issue => ({
+                        number: issue.number,
+                        title: issue.title,
+                        body: issue.body,
+                        url: issue.url
+                    }));
+                }
+                catch (issueError) {
+                    console.warn('Failed to fetch linked issues:', issueError);
+                }
             }
             catch (error) {
                 console.warn('Failed to fetch PR details:', error);
@@ -148,7 +196,7 @@ class ReviewOrchestrator {
             riskLevel,
         });
         // Build user message
-        const userMessage = this.promptManager.buildUserMessage(diff, parsedFiles, prDetails);
+        const userMessage = this.promptManager.buildUserMessage(diff, parsedFiles, prDetails, issues);
         return { systemMessage, userMessage };
     }
     /**
@@ -161,6 +209,17 @@ class ReviewOrchestrator {
             try {
                 const parsed = JSON.parse(jsonMatch[0]);
                 if (this.isValidReviewResult(parsed)) {
+                    // Backfill missing files in fileBreakdown from diffFiles
+                    const aiFiles = new Set(parsed.fileBreakdown.map((f) => f.filename));
+                    const missingFiles = diffFiles.filter(df => !aiFiles.has(df.filename));
+                    if (missingFiles.length > 0) {
+                        const extraBreakdown = missingFiles.map(df => ({
+                            filename: df.filename,
+                            status: (df.status === 'renamed' ? 'modified' : df.status),
+                            summary: 'No specific comments for this file.'
+                        }));
+                        parsed.fileBreakdown.push(...extraBreakdown);
+                    }
                     return parsed;
                 }
             }

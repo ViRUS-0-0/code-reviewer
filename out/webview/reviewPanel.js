@@ -63,7 +63,7 @@ class ReviewPanel {
         this._panel.webview.html = this._getHtmlForWebview(this._panel.webview, result);
     }
     _getHtmlForWebview(webview, result) {
-        const resultJson = JSON.stringify(result);
+        const resultJson = JSON.stringify(result).replace(/</g, '\\u003c');
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -216,69 +216,86 @@ class ReviewPanel {
 </head>
 <body>
   <div id="content"></div>
+  <script id="review-data" type="application/json">${resultJson}</script>
 
   <script>
-    const vscode = acquireVsCodeApi();
-    const result = ${resultJson};
-    const contentDiv = document.getElementById('content');
+    (function() {
+      const vscode = acquireVsCodeApi();
+      const dataElement = document.getElementById('review-data');
+      const result = JSON.parse(dataElement.textContent);
+      const contentDiv = document.getElementById('content');
 
-    function openFile(file, line) {
-      vscode.postMessage({ command: 'openFile', file, line });
-    }
-
-    function render() {
-      if (typeof result === 'string') {
-        contentDiv.innerHTML = \`<div class="main-content"><div class="summary-section"><h2>Raw Review</h2>\${result}</div></div>\`;
-        return;
+      function escapeHtml(unsafe) {
+        return (unsafe || '')
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
       }
 
-      contentDiv.innerHTML = \`
-        <div class="hero">
-          <h1 style="margin:0; font-size: 42px;">Code Review Complete</h1>
-          <div class="verdict-large verdict-\${result.verdict.replace(/_/g, '-')}">
-            \${result.verdict.toUpperCase().replace(/-/g, ' ')}
-          </div>
-        </div>
+      window.openFile = function(file, line) {
+        vscode.postMessage({ command: 'openFile', file, line });
+      };
 
-        <div class="main-content">
-          <div class="summary-section">
-            <h2>Overview</h2>
-            <div style="font-size: 18px;">\${result.summary}</div>
-          </div>
+      function render() {
+        if (typeof result === 'string') {
+          contentDiv.innerHTML = '<div class="main-content"><div class="summary-section"><h2>Raw Review</h2><pre style="white-space: pre-wrap;">' + escapeHtml(result) + '</pre></div></div>';
+          return;
+        }
 
-          <div class="section">
-            <h2>Detected Issues</h2>
-            <div class="issue-grid">
-              \${result.issues.map(issue => \`
-                <div class="issue-card sev-\${issue.severity}" onclick="openFile('\${issue.file || ''}', \${issue.line || 0})">
-                  <span class="severity-tag">\${issue.severity}</span>
-                  <div class="issue-title">\${issue.title}</div>
-                  <div class="issue-desc">\${issue.description}</div>
-                  \${issue.snippet ? \`<div class="code-snippet" style="font-size: 11px; margin-bottom: 10px; padding: 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">\${issue.snippet}</div>\` : ''}
-                  \${issue.file ? \`<div class="issue-loc">📍 \${issue.file}\${issue.line ? ':' + issue.line : ''}</div>\` : ''}
-                </div>
-              \`).join('')}
-            </div>
-          </div>
+        const issuesHtml = (result.issues || []).map(issue => {
+          const snippetHtml = issue.snippet ? '<div class="code-snippet" style="font-size: 11px; margin-bottom: 10px; padding: 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">' + escapeHtml(issue.snippet) + '</div>' : '';
+          const locHtml = issue.file ? '<div class="issue-loc">📍 ' + escapeHtml(issue.file) + (issue.line ? ':' + issue.line : '') + '</div>' : '';
+          
+          return '<div class="issue-card sev-' + issue.severity + '" onclick="openFile(\\'' + escapeHtml(issue.file || '') + '\\', ' + (issue.line || 0) + ')">' +
+                    '<span class="severity-tag">' + issue.severity + '</span>' +
+                    '<div class="issue-title">' + escapeHtml(issue.title) + '</div>' +
+                    '<div class="issue-desc">' + escapeHtml(issue.description) + '</div>' +
+                    snippetHtml +
+                    locHtml +
+                  '</div>';
+        }).join('');
 
-          <div class="file-analysis">
-            <h2>Detailed File Breakdown</h2>
-            \${result.fileBreakdown.map(file => \`
-              <div class="file-row">
-                <div class="file-header">
-                  <span>📄 \${file.filename}</span>
-                  <span style="opacity: 0.6; font-size: 12px;">\${file.status.toUpperCase()}</span>
-                </div>
-                \${file.summary ? \`<div class="file-summary">\${file.summary}</div>\` : ''}
-                \${file.snippet ? \`<div class="code-snippet">\${file.snippet}</div>\` : ''}
-              </div>
-            \`).join('')}
-          </div>
-        </div>
-      \`;
-    }
+        const filesHtml = (result.fileBreakdown || []).map(file => {
+          const summaryHtml = file.summary ? '<div class="file-summary">' + escapeHtml(file.summary) + '</div>' : '';
+          const snippetHtml = file.snippet ? '<div class="code-snippet">' + escapeHtml(file.snippet) + '</div>' : '';
+          
+          return '<div class="file-row">' +
+                    '<div class="file-header">' +
+                      '<span>📄 ' + escapeHtml(file.filename) + '</span>' +
+                      '<span style="opacity: 0.6; font-size: 12px;">' + escapeHtml(file.status).toUpperCase() + '</span>' +
+                    '</div>' +
+                    summaryHtml +
+                    snippetHtml +
+                  '</div>';
+        }).join('');
 
-    render();
+        contentDiv.innerHTML = 
+          '<div class="hero">' +
+            '<h1 style="margin:0; font-size: 42px;">Code Review Complete</h1>' +
+            '<div class="verdict-large verdict-' + (result.verdict || 'approved').replace(/_/g, '-') + '">' +
+              (result.verdict || 'approved').toUpperCase().replace(/-/g, ' ') +
+            '</div>' +
+          '</div>' +
+          '<div class="main-content">' +
+            '<div class="summary-section">' +
+              '<h2>Overview</h2>' +
+              '<div style="font-size: 18px;">' + (result.summary ? result.summary.replace(/\\n/g, '<br>') : '') + '</div>' +
+            '</div>' +
+            '<div class="section">' +
+              '<h2>Detected Issues</h2>' +
+              '<div class="issue-grid">' + issuesHtml + '</div>' +
+            '</div>' +
+            '<div class="file-analysis">' +
+              '<h2>Detailed File Breakdown</h2>' +
+              filesHtml +
+            '</div>' +
+          '</div>';
+      }
+
+      render();
+    })();
   </script>
 </body>
 </html>`;

@@ -55,11 +55,6 @@
                     "type": "string",
                     "default": "",
                     "description": "GitHub Personal Access Token used to fetch PRs (leave blank to be prompted)"
-                },
-                "code-review.systemPrompt": {
-                    "type": "string",
-                    "default": "You are an expert backend engineer performing a code review. Focus on API contracts, performance, security, and data integrity.",
-                    "description": "Custom system prompt for the AI review"
                 }
             }
         },
