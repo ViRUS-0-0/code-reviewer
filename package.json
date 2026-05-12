@@ -2,7 +2,7 @@
     "name": "code-review",
     "displayName": "Code Review AI",
     "description": "AI-powered code review and knowledge indexing",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "engines": {
         "vscode": "^1.90.0"
     },
