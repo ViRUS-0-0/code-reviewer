@@ -62,6 +62,30 @@ export interface RepositoryInfo {
   forksCount: number;
 }
 
+export interface PRReviewComment {
+  path: string;
+  line: number;
+  side?: 'RIGHT' | 'LEFT';
+  body: string;
+}
+
+export interface PRReviewPayload {
+  commit_id?: string;
+  body: string;
+  event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+  comments?: PRReviewComment[];
+}
+
+export interface PRReviewResponse {
+  id: number;
+  html_url: string;
+  state: string;
+  user: {
+    login: string;
+  };
+  submitted_at: string;
+}
+
 /**
  * GitHub API service with rate limit handling and exponential backoff
  */

@@ -5,6 +5,8 @@ import { AIProvider } from './types';
  * Google Gemini AI Provider
  */
 export class GeminiProvider implements AIProvider {
+  public name = 'Google Gemini';
+  public model = 'gemini-1.5-flash';
   private genAI: GoogleGenerativeAI;
 
   constructor(apiKey: string) {

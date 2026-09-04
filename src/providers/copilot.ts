@@ -6,6 +6,9 @@ import { AIProvider } from './types';
  * Uses the vscode.lm API to access GitHub Copilot models
  */
 export class CopilotProvider implements AIProvider {
+  public name = 'GitHub Copilot';
+  public model = 'GPT-4o';
+
   /**
    * Generate a code review using GitHub Copilot
    */
@@ -52,7 +55,8 @@ export class CopilotProvider implements AIProvider {
         );
       }
 
-      console.log(`Using model: ${model.id} (${model.family} by ${model.vendor})`);
+      this.model = model.id || model.family || this.model;
+      console.log(`Using model: ${this.model} (${model.family} by ${model.vendor})`);
 
       // Build messages
       const fullPrompt = systemMessage

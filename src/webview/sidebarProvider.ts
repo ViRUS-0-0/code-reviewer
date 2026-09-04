@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
+import { ReviewPanel } from './reviewPanel';
 
 export interface ReviewResult {
   verdict: 'approved' | 'approved-with-comments' | 'changes-requested';
   summary: string;
+  copyableSummary?: string;
+  aiProvider?: string;
+  aiModel?: string;
   issues: ReviewIssue[];
   fileBreakdown: FileReview[];
 }
@@ -14,6 +18,9 @@ export interface ReviewIssue {
   file?: string;
   line?: number;
   snippet?: string;
+  currentCode?: string;
+  resolution?: string;
+  updatedCode?: string;
 }
 
 export interface FileReview {
@@ -56,6 +63,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'review':
           vscode.commands.executeCommand('code-review.reviewChanges');
+          break;
+        case 'openDashboard':
+          if (data.result) {
+            ReviewPanel.createOrShow(this._extensionUri, data.result);
+          }
           break;
         case 'copyReview':
           await this._copyReviewToClipboard(data.content);
@@ -282,6 +294,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     .verdict-approved { background: rgba(137, 209, 133, 0.2); color: var(--low); border: 1px solid var(--low); }
     .verdict-changes-requested { background: rgba(244, 135, 113, 0.2); color: var(--critical); border: 1px solid var(--critical); }
     .verdict-approved-with-comments { background: rgba(255, 204, 0, 0.2); color: var(--high); border: 1px solid var(--high); }
+    .ai-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .action-btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .btn-sm {
+      padding: 6px 10px;
+      font-size: 11px;
+    }
   </style>
 </head>
 <body>
@@ -303,6 +336,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     </button>
 
     <div id="review-preview" class="glass-card hidden">
+      <div id="ai-provider-badge" class="ai-badge hidden">
+        <span>⚡</span> <span id="ai-provider-name">AI Engine</span>
+      </div>
       <div id="verdict-banner" class="verdict-banner"></div>
       <div id="summary-text" style="font-size: 12px; line-height: 1.4; opacity: 0.9;"></div>
       <div class="issue-summary">
@@ -310,6 +346,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <div><span class="sev-dot sev-high"></span> <span id="count-high">0</span></div>
         <div><span class="sev-dot sev-medium"></span> <span id="count-medium">0</span></div>
         <div><span class="sev-dot sev-low"></span> <span id="count-low">0</span></div>
+      </div>
+      <div class="action-btn-row">
+        <button class="btn-outline btn-sm" id="copy-summary-btn" style="flex: 1;">
+          <span>📋</span> Copy Summary
+        </button>
+        <button class="btn-primary btn-sm" id="open-dashboard-btn" style="flex: 1;">
+          <span>🔍</span> Full Report
+        </button>
       </div>
     </div>
 
@@ -336,6 +380,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const emptyState = document.getElementById('empty-state');
     const errorCard = document.getElementById('error-card');
     const errorMessage = document.getElementById('error-message');
+    const copySummaryBtn = document.getElementById('copy-summary-btn');
+    const openDashboardBtn = document.getElementById('open-dashboard-btn');
+    const aiProviderBadge = document.getElementById('ai-provider-badge');
+    const aiProviderName = document.getElementById('ai-provider-name');
+
+    let currentReviewResult = null;
 
     selectBtn.addEventListener('click', () => {
       vscode.postMessage({ type: 'selectSource' });
@@ -343,6 +393,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     startBtn.addEventListener('click', () => {
       vscode.postMessage({ type: 'review' });
+    });
+
+    copySummaryBtn.addEventListener('click', () => {
+      if (!currentReviewResult) return;
+      let textToCopy = '';
+      if (typeof currentReviewResult === 'string') {
+        textToCopy = currentReviewResult;
+      } else if (currentReviewResult.copyableSummary) {
+        textToCopy = currentReviewResult.copyableSummary;
+      } else {
+        const issuesSummary = (currentReviewResult.issues || []).map(i => '- [' + i.severity.toUpperCase() + '] ' + i.title + (i.file ? ' (' + i.file + (i.line ? ':' + i.line : '') + ')' : '')).join('\\n');
+        textToCopy = '## Review Summary: ' + currentReviewResult.verdict.toUpperCase() + '\\n\\n' + currentReviewResult.summary + (issuesSummary ? '\\n\\n### Action Items:\\n' + issuesSummary : '');
+      }
+      vscode.postMessage({ type: 'copyReview', content: textToCopy });
+    });
+
+    openDashboardBtn.addEventListener('click', () => {
+      if (currentReviewResult) {
+        vscode.postMessage({ type: 'openDashboard', result: currentReviewResult });
+      }
     });
 
     window.addEventListener('message', event => {
@@ -367,12 +437,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'reviewResult':
           const result = message.result;
+          currentReviewResult = result;
           emptyState.classList.add('hidden');
           reviewPreview.classList.remove('hidden');
           
           if (typeof result === 'string') {
+            aiProviderBadge.classList.add('hidden');
             document.getElementById('summary-text').textContent = result.substring(0, 200) + '...';
             return;
+          }
+
+          if (result.aiProvider) {
+            aiProviderBadge.classList.remove('hidden');
+            aiProviderName.textContent = result.aiProvider + (result.aiModel ? ' (' + result.aiModel + ')' : '');
+          } else {
+            aiProviderBadge.classList.add('hidden');
           }
 
           const banner = document.getElementById('verdict-banner');
@@ -383,7 +462,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           
           // Count severities
           const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-          result.issues.forEach(i => counts[i.severity]++);
+          (result.issues || []).forEach(i => {
+            if (counts[i.severity] !== undefined) {
+              counts[i.severity]++;
+            }
+          });
           
           document.getElementById('count-critical').textContent = counts.critical;
           document.getElementById('count-high').textContent = counts.high;

@@ -7,6 +7,8 @@ const generative_ai_1 = require("@google/generative-ai");
  */
 class GeminiProvider {
     constructor(apiKey) {
+        this.name = 'Google Gemini';
+        this.model = 'gemini-1.5-flash';
         if (!apiKey) {
             throw new Error('Gemini API key is required');
         }

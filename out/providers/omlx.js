@@ -1,20 +1,27 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.OpenAIProvider = void 0;
+exports.OMLXProvider = void 0;
 const openai_1 = require("openai");
-class OpenAIProvider {
-    constructor(apiKey) {
-        this.name = 'OpenAI';
-        this.model = 'gpt-4o';
-        if (!apiKey) {
-            throw new Error('OpenAI API key is required');
+class OMLXProvider {
+    constructor(baseUrl, model, apiKey) {
+        this.name = 'oMLX';
+        const key = apiKey || 'no-key-needed';
+        let normalizedBaseUrl = baseUrl.trim();
+        if (!normalizedBaseUrl.endsWith('/v1') && !normalizedBaseUrl.endsWith('/v1/')) {
+            normalizedBaseUrl = normalizedBaseUrl.endsWith('/')
+                ? `${normalizedBaseUrl}v1`
+                : `${normalizedBaseUrl}/v1`;
         }
-        this.client = new openai_1.default({ apiKey });
+        this.client = new openai_1.default({
+            baseURL: normalizedBaseUrl,
+            apiKey: key,
+        });
+        this.model = model || 'llama3';
     }
     async generateReview(userMessage, systemMessage) {
         try {
             const response = await this.client.chat.completions.create({
-                model: 'gpt-4o',
+                model: this.model,
                 messages: [
                     {
                         role: 'system',
@@ -29,9 +36,9 @@ class OpenAIProvider {
             return response.choices[0]?.message?.content || 'No review generated.';
         }
         catch (error) {
-            throw new Error(`OpenAI Review generation failed: ${error.message}`);
+            throw new Error(`oMLX Review generation failed: ${error.message}`);
         }
     }
 }
-exports.OpenAIProvider = OpenAIProvider;
-//# sourceMappingURL=openai.js.map
+exports.OMLXProvider = OMLXProvider;
+//# sourceMappingURL=omlx.js.map

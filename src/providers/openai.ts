@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import { AIProvider } from './types';
 
 export class OpenAIProvider implements AIProvider {
+  public name = 'OpenAI';
+  public model = 'gpt-4o';
   private client: OpenAI;
 
   constructor(apiKey: string) {

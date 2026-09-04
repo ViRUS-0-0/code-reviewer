@@ -7,6 +7,10 @@ const vscode = require("vscode");
  * Uses the vscode.lm API to access GitHub Copilot models
  */
 class CopilotProvider {
+    constructor() {
+        this.name = 'GitHub Copilot';
+        this.model = 'GPT-4o';
+    }
     /**
      * Generate a code review using GitHub Copilot
      */
@@ -47,7 +51,8 @@ class CopilotProvider {
                     '2. You are signed in to GitHub\n' +
                     '3. You have an active subscription');
             }
-            console.log(`Using model: ${model.id} (${model.family} by ${model.vendor})`);
+            this.model = model.id || model.family || this.model;
+            console.log(`Using model: ${this.model} (${model.family} by ${model.vendor})`);
             // Build messages
             const fullPrompt = systemMessage
                 ? `SYSTEM INSTRUCTIONS:\n${systemMessage}\n\nUSER REQUEST:\n${userMessage}`

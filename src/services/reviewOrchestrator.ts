@@ -288,34 +288,106 @@ export class ReviewOrchestrator {
    * Parse AI review result into structured format
    */
   private parseReviewResult(review: string, diffFiles: DiffFile[]): ReviewResult {
-    // Try to extract JSON from the review
-    const jsonMatch = review.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (this.isValidReviewResult(parsed)) {
-          // Backfill missing files in fileBreakdown from diffFiles
-          const aiFiles = new Set(parsed.fileBreakdown.map((f: any) => f.filename));
-          const missingFiles = diffFiles.filter(df => !aiFiles.has(df.filename));
-          
-          if (missingFiles.length > 0) {
-            const extraBreakdown = missingFiles.map(df => ({
-              filename: df.filename,
-              status: (df.status === 'renamed' ? 'modified' : df.status) as 'added' | 'modified' | 'deleted',
-              summary: 'No specific comments for this file.'
-            }));
-            parsed.fileBreakdown.push(...extraBreakdown);
-          }
+    const aiProviderName = this.aiProvider.name;
+    const aiModelName = this.aiProvider.model;
 
-          return parsed;
-        }
-      } catch (error) {
-        console.warn('Failed to parse JSON from review:', error);
+    // Clean markdown code blocks if present
+    let cleanedReview = review.trim();
+    const codeBlockMatch = cleanedReview.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      cleanedReview = codeBlockMatch[1].trim();
+    } else {
+      const firstBrace = cleanedReview.indexOf('{');
+      const lastBrace = cleanedReview.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleanedReview = cleanedReview.substring(firstBrace, lastBrace + 1);
       }
     }
 
+    try {
+      const parsed = JSON.parse(cleanedReview);
+      if (parsed && typeof parsed === 'object') {
+        const rawVerdict = String(parsed.verdict || 'approved-with-comments').toLowerCase().replace(/_/g, '-');
+        const verdict = (['approved', 'approved-with-comments', 'changes-requested'].includes(rawVerdict)
+          ? rawVerdict
+          : (rawVerdict.includes('change') || rawVerdict.includes('reject') ? 'changes-requested' : 'approved')) as any;
+
+        parsed.verdict = verdict;
+        parsed.summary = typeof parsed.summary === 'string' ? parsed.summary : '';
+        parsed.issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+        parsed.fileBreakdown = Array.isArray(parsed.fileBreakdown) ? parsed.fileBreakdown : [];
+        parsed.aiProvider = aiProviderName;
+        parsed.aiModel = aiModelName;
+
+        // Normalize issue fields
+        parsed.issues = parsed.issues.map((issue: any) => {
+          const currentCode = issue.currentCode || issue.snippet || '';
+          return {
+            severity: issue.severity || 'medium',
+            title: issue.title || 'Code Quality Issue',
+            description: issue.description || '',
+            file: issue.file,
+            line: typeof issue.line === 'number' ? issue.line : (issue.line ? parseInt(issue.line, 10) : undefined),
+            snippet: currentCode,
+            currentCode: currentCode,
+            resolution: issue.resolution,
+            updatedCode: issue.updatedCode
+          };
+        });
+
+        // Backfill missing files in fileBreakdown from diffFiles
+        const aiFiles = new Set(parsed.fileBreakdown.map((f: any) => f.filename));
+        const missingFiles = diffFiles.filter(df => !aiFiles.has(df.filename));
+        
+        if (missingFiles.length > 0) {
+          const extraBreakdown = missingFiles.map(df => ({
+            filename: df.filename,
+            status: (df.status === 'renamed' ? 'modified' : df.status) as 'added' | 'modified' | 'deleted',
+            summary: 'No specific issues identified for this file.'
+          }));
+          parsed.fileBreakdown.push(...extraBreakdown);
+        }
+
+        // Generate copyableSummary if missing
+        if (!parsed.copyableSummary || String(parsed.copyableSummary).trim().length === 0) {
+          parsed.copyableSummary = this.generateCopyableSummary(parsed);
+        }
+
+        return parsed as ReviewResult;
+      }
+    } catch (error) {
+      console.warn('Failed to parse JSON from review, proceeding with text fallback:', error);
+    }
+
     // Fallback: parse review text to extract verdict and issues
-    return this.parseReviewText(review, diffFiles);
+    const fallbackResult = this.parseReviewText(review, diffFiles);
+    fallbackResult.aiProvider = aiProviderName;
+    fallbackResult.aiModel = aiModelName;
+    fallbackResult.copyableSummary = this.generateCopyableSummary(fallbackResult);
+    return fallbackResult;
+  }
+
+  /**
+   * Helper to generate a clean, copyable markdown summary of requested changes
+   */
+  private generateCopyableSummary(result: Partial<ReviewResult>): string {
+    const issues = result.issues || [];
+    if (issues.length === 0) {
+      return `### Review Verdict: ${((result.verdict || 'approved')).toUpperCase().replace(/-/g, ' ')}\n\n` +
+        `✅ **No blocking changes requested.**\n` +
+        `- All modified files passed quality and security checks.\n` +
+        `- Ready to proceed with merge once CI passes.`;
+    }
+
+    const items = issues.map(issue => {
+      const loc = issue.file ? ` (${issue.file}${issue.line ? `:${issue.line}` : ''})` : '';
+      const sev = (issue.severity || 'medium').toUpperCase();
+      const res = issue.resolution ? ` → ${issue.resolution}` : '';
+      return `- [ ] **[${sev}]** **${issue.title}**${loc}${res}`;
+    });
+
+    return `### Requested Changes & Action Items (${((result.verdict || 'changes-requested')).toUpperCase().replace(/-/g, ' ')})\n\n` +
+      items.join('\n');
   }
 
   /**
@@ -325,7 +397,6 @@ export class ReviewOrchestrator {
     return (
       obj &&
       typeof obj === 'object' &&
-      ['approved', 'approved-with-comments', 'changes-requested'].includes(obj.verdict) &&
       typeof obj.summary === 'string' &&
       Array.isArray(obj.issues) &&
       Array.isArray(obj.fileBreakdown)
@@ -348,19 +419,19 @@ export class ReviewOrchestrator {
       verdict = 'changes-requested';
     }
 
-    // Extract issues by severity
+    // Extract structured issues from review text
     const issues = this.extractIssues(review);
 
     // Create file breakdown
     const fileBreakdown = diffFiles.map((file) => ({
       filename: file.filename,
       status: (file.status === 'renamed' ? 'modified' : file.status) as 'added' | 'modified' | 'deleted',
-      issues: issues.filter((issue) => !issue.file || issue.file === file.filename),
+      summary: `Analyzed ${file.filename} (+${file.additions}/-${file.deletions})`,
     }));
 
     return {
       verdict,
-      summary: review.substring(0, 500), // Use first 500 chars as summary
+      summary: review.substring(0, 500),
       issues,
       fileBreakdown,
     };
@@ -375,31 +446,93 @@ export class ReviewOrchestrator {
     description: string;
     file?: string;
     line?: number;
+    snippet?: string;
+    currentCode?: string;
+    resolution?: string;
+    updatedCode?: string;
   }> {
-    const issues = [];
+    const issues: Array<{
+      severity: 'critical' | 'high' | 'medium' | 'low';
+      title: string;
+      description: string;
+      file?: string;
+      line?: number;
+      snippet?: string;
+      currentCode?: string;
+      resolution?: string;
+      updatedCode?: string;
+    }> = [];
 
-    // Simple pattern matching for issues
-    const severityPatterns = [
-      { pattern: /critical|security|vulnerability/gi, severity: 'critical' as const },
-      { pattern: /error|bug|issue|problem/gi, severity: 'high' as const },
-      { pattern: /warning|concern|consider/gi, severity: 'medium' as const },
-      { pattern: /suggestion|note|tip|improvement/gi, severity: 'low' as const },
-    ];
+    // Split review by block headers (e.g., File:, Issue:, or numbered issues)
+    const blocks = review.split(/(?:^|\n)(?=(?:File:\s*|Issue:\s*|\d+\.\s+\*\*|###?\s+Issue))/i);
 
-    const lines = review.split('\n');
-    for (const line of lines) {
-      for (const { pattern, severity } of severityPatterns) {
-        if (pattern.test(line)) {
-          issues.push({
-            severity,
-            title: line.substring(0, 100),
-            description: line,
-          });
-          break;
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+
+      const fileMatch = block.match(/File:\s*([^\n:]+)(?::(\d+))?/i);
+      const issueMatch = block.match(/(?:Issue|Finding|Problem):\s*([^\n]+)/i) || block.match(/^\s*(?:\d+\.\s+)?\*\*([^*]+)\*\*/m);
+      if (!issueMatch) continue;
+
+      const file = fileMatch ? fileMatch[1].trim() : undefined;
+      const line = fileMatch && fileMatch[2] ? parseInt(fileMatch[2], 10) : undefined;
+      const title = issueMatch[1].trim();
+
+      const currentCodeMatch = block.match(/Current Code:\s*```[a-z]*\n([\s\S]*?)```/i);
+      const resolutionMatch = block.match(/Resolution:\s*([^\n]+(?:\n(?!\s*(?:Updated Code:|File:|Issue:))[^\n]+)*)/i);
+      const updatedCodeMatch = block.match(/Updated Code:\s*```[a-z]*\n([\s\S]*?)```/i);
+
+      const currentCode = currentCodeMatch ? currentCodeMatch[1].trim() : undefined;
+      const resolution = resolutionMatch ? resolutionMatch[1].trim() : undefined;
+      const updatedCode = updatedCodeMatch ? updatedCodeMatch[1].trim() : undefined;
+
+      // Determine severity
+      let severity: 'critical' | 'high' | 'medium' | 'low' = 'medium';
+      const lowerText = (title + ' ' + (resolution || '')).toLowerCase();
+      if (lowerText.includes('critical') || lowerText.includes('security') || lowerText.includes('vulnerability')) {
+        severity = 'critical';
+      } else if (lowerText.includes('error') || lowerText.includes('bug') || lowerText.includes('failure')) {
+        severity = 'high';
+      } else if (lowerText.includes('suggestion') || lowerText.includes('style') || lowerText.includes('nit')) {
+        severity = 'low';
+      }
+
+      issues.push({
+        severity,
+        title,
+        description: resolution ? `${title} - ${resolution}` : title,
+        file,
+        line,
+        snippet: currentCode,
+        currentCode,
+        resolution,
+        updatedCode
+      });
+    }
+
+    // If structured blocks were not found, fall back to line matching
+    if (issues.length === 0) {
+      const severityPatterns = [
+        { pattern: /critical|security|vulnerability/gi, severity: 'critical' as const },
+        { pattern: /error|bug|issue|problem/gi, severity: 'high' as const },
+        { pattern: /warning|concern|consider/gi, severity: 'medium' as const },
+        { pattern: /suggestion|note|tip|improvement/gi, severity: 'low' as const },
+      ];
+
+      const lines = review.split('\n');
+      for (const line of lines) {
+        for (const { pattern, severity } of severityPatterns) {
+          if (pattern.test(line) && line.trim().length > 10) {
+            issues.push({
+              severity,
+              title: line.replace(/^[-*#\d.]+\s*/, '').substring(0, 100),
+              description: line.trim(),
+            });
+            break;
+          }
         }
       }
     }
 
-    return issues.slice(0, 10); // Limit to 10 issues
+    return issues.slice(0, 20);
   }
 }

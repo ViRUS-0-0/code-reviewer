@@ -71,12 +71,16 @@ class PromptManager {
         // Add review request
         parts.push('\n---\n' +
             '### Review Instructions\n' +
-            'Please perform a thorough code review. **Crucially, you must evaluate EVERY file listed in the "Affected Files" section above.**\n\n' +
-            'For each file:\n' +
-            '1. Identify potential bugs, logic errors, or security vulnerabilities.\n' +
-            '2. Suggest performance optimizations or better patterns where applicable.\n' +
-            '3. In your response, ensure the "fileBreakdown" array contains an entry for every single file mentioned, even if only to say "No issues found".\n\n' +
-            'Be specific about which files and line numbers you are referring to.');
+            'Please perform a thorough, rigorous, and highly detailed code review. **Crucially, you must evaluate EVERY file listed in the "Affected Files" section above.**\n\n' +
+            'Requirements:\n' +
+            '1. **Structured Issues**: For every issue found, provide:\n' +
+            '   - The exact file path (`file`) and line number (`line`).\n' +
+            '   - Clear description of the problem and potential impact (`description`).\n' +
+            '   - The problematic piece of code (`currentCode` / `snippet`).\n' +
+            '   - The recommended resolution explanation (`resolution`).\n' +
+            '   - The corrected replacement code snippet (`updatedCode`).\n' +
+            '2. **Detailed File Breakdown**: Include a comprehensive breakdown for every file with its change summary and key snippets.\n' +
+            '3. **Small Copyable Summary**: Provide a concise markdown bullet-list summary in `copyableSummary` summarizing all requested changes and action items that the author can check off.');
         return parts.join('\n');
     }
     /**

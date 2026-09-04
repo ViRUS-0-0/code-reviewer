@@ -9,6 +9,8 @@ import { PRSelectionPanel } from './webview/prSelectionPanel';
 import { GitHubTokenManager } from './services/githubTokenManager';
 import { GeminiProvider } from './providers/gemini';
 import { ReviewPanel } from './webview/reviewPanel';
+import { OMLXProvider } from './providers/omlx';
+import { AntigravityProvider } from './providers/antigravity';
 
 let errorHandlersRegistered = false;
 
@@ -215,11 +217,16 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Get AI provider configuration
 			const config = vscode.workspace.getConfiguration('code-review');
-			const aiProviderType = config.get<string>('aiProvider') || 'GitHub Copilot';
+			const aiProviderType = config.get<string>('aiProvider') || 'Antigravity';
 
 			let provider: AIProvider;
 
-			if (aiProviderType === 'GitHub Copilot') {
+			if (aiProviderType === 'Antigravity') {
+				const model = config.get<string>('antigravityModel') || 'auto';
+				const endpoint = config.get<string>('antigravityEndpoint') || '';
+				const apiKey = config.get<string>('antigravityApiKey') || '';
+				provider = new AntigravityProvider({ modelPreference: model, endpoint, apiKey });
+			} else if (aiProviderType === 'GitHub Copilot') {
 				provider = new CopilotProvider();
 			} else if (aiProviderType === 'Gemini') {
 				const apiKey = config.get<string>('geminiApiKey');
@@ -231,6 +238,11 @@ export function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 				provider = new GeminiProvider(apiKey);
+			} else if (aiProviderType === 'oMLX') {
+				const baseUrl = config.get<string>('omlxBaseUrl') || 'http://localhost:11436/v1';
+				const model = config.get<string>('omlxModel') || 'llama3';
+				const apiKey = config.get<string>('omlxApiKey') || '';
+				provider = new OMLXProvider(baseUrl, model, apiKey);
 			} else {
 				const apiKey = config.get<string>('openaiApiKey');
 				if (!apiKey) {
@@ -302,10 +314,15 @@ export function activate(context: vscode.ExtensionContext) {
 			
 			// Get AI provider from config
 			const config = vscode.workspace.getConfiguration('code-review');
-			const aiProviderType = config.get<string>('aiProvider') || 'GitHub Copilot';
+			const aiProviderType = config.get<string>('aiProvider') || 'Antigravity';
 			let provider: AIProvider;
 
-			if (aiProviderType === 'GitHub Copilot') {
+			if (aiProviderType === 'Antigravity') {
+				const model = config.get<string>('antigravityModel') || 'auto';
+				const endpoint = config.get<string>('antigravityEndpoint') || '';
+				const apiKey = config.get<string>('antigravityApiKey') || '';
+				provider = new AntigravityProvider({ modelPreference: model, endpoint, apiKey });
+			} else if (aiProviderType === 'GitHub Copilot') {
 				provider = new CopilotProvider();
 			} else if (aiProviderType === 'Gemini') {
 				const apiKey = config.get<string>('geminiApiKey');
@@ -314,6 +331,11 @@ export function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 				provider = new GeminiProvider(apiKey);
+			} else if (aiProviderType === 'oMLX') {
+				const baseUrl = config.get<string>('omlxBaseUrl') || 'http://localhost:11436/v1';
+				const model = config.get<string>('omlxModel') || 'llama3';
+				const apiKey = config.get<string>('omlxApiKey') || '';
+				provider = new OMLXProvider(baseUrl, model, apiKey);
 			} else {
 				const apiKey = config.get<string>('openaiApiKey');
 				if (!apiKey) {
@@ -364,14 +386,47 @@ export function activate(context: vscode.ExtensionContext) {
 			if (typeof review === 'string') {
 				response.markdown('\n\n' + review);
 			} else {
-				response.markdown(`\n\n## Code Review Verdict: ${review.verdict.toUpperCase()}\n\n`);
-				response.markdown(`${review.summary}\n\n`);
+				const aiName = review.aiProvider || provider.name || 'AI Engine';
+				const aiModel = review.aiModel || provider.model;
+				const aiDisplay = aiModel ? `${aiName} (${aiModel})` : aiName;
+
+				response.markdown(`\n\n> ⚡ **AI Engine:** ${aiDisplay}\n\n`);
+				response.markdown(`## Code Review Verdict: ${review.verdict.toUpperCase().replace(/-/g, ' ')}\n\n`);
 				
-				if (review.issues.length > 0) {
-					response.markdown('### Key Issues\n');
-					review.issues.forEach(issue => {
-						response.markdown(`- **[${issue.severity.toUpperCase()}]** ${issue.title}\n  ${issue.description}\n`);
+				if (review.copyableSummary) {
+					response.markdown(`### 📋 Actionable Summary of Requested Changes\n\n\`\`\`markdown\n${review.copyableSummary}\n\`\`\`\n\n`);
+				}
+
+				response.markdown(`### Overview\n${review.summary}\n\n`);
+				
+				if (review.issues && review.issues.length > 0) {
+					response.markdown(`### ⚠️ Detected Issues & Remediation (${review.issues.length})\n\n`);
+					review.issues.forEach((issue, idx) => {
+						const loc = issue.file ? ` \`📍 ${issue.file}${issue.line ? `:${issue.line}` : ''}\`` : '';
+						response.markdown(`#### ${idx + 1}. [${issue.severity.toUpperCase()}] ${issue.title}${loc}\n\n`);
+						response.markdown(`${issue.description}\n\n`);
+						
+						const currentCode = issue.currentCode || issue.snippet;
+						if (currentCode) {
+							response.markdown(`**Problematic Code:**\n\`\`\`\n${currentCode}\n\`\`\`\n\n`);
+						}
+						
+						if (issue.resolution) {
+							response.markdown(`**💡 Resolution:** ${issue.resolution}\n\n`);
+						}
+						
+						if (issue.updatedCode) {
+							response.markdown(`**Suggested Fix:**\n\`\`\`\n${issue.updatedCode}\n\`\`\`\n\n`);
+						}
 					});
+				}
+
+				if (review.fileBreakdown && review.fileBreakdown.length > 0) {
+					response.markdown(`### 📁 Detailed File Breakdown\n\n`);
+					review.fileBreakdown.forEach((file) => {
+						response.markdown(`- **\`${file.filename}\`** (${file.status.toUpperCase()}): ${file.summary || 'Analyzed'}\n`);
+					});
+					response.markdown('\n');
 				}
 			}
 		} catch (error: any) {

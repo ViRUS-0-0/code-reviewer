@@ -10,10 +10,9 @@ class GitService {
         }
         this.workspaceRoot = workspaceRoot;
     }
-    async runGit(command) {
+    async runGit(commandOrArgs) {
         return new Promise((resolve, reject) => {
-            const parts = command.split(' ');
-            const args = parts.slice(0);
+            const args = Array.isArray(commandOrArgs) ? [...commandOrArgs] : commandOrArgs.split(' ');
             // Add exclusions for diff commands to keep them manageable
             if (args[0] === 'diff') {
                 const exclusions = [
@@ -28,7 +27,9 @@ class GitService {
                     'build/*',
                     '.next/*',
                 ];
-                args.push('--', '.');
+                if (!args.includes('--')) {
+                    args.push('--', '.');
+                }
                 exclusions.forEach(e => args.push(`:!${e}`));
             }
             const child = (0, child_process_1.spawn)('git', args, {
@@ -69,11 +70,11 @@ class GitService {
             }
             const normalizedPath = relativePath.replace(/\\/g, '/');
             try {
-                activeFileDiff = await this.runGit(`diff HEAD -- "${normalizedPath}"`);
+                activeFileDiff = await this.runGit(['diff', 'HEAD', '--', normalizedPath]);
             }
             catch (error) {
                 try {
-                    activeFileDiff = await this.runGit(`diff -- "${normalizedPath}"`);
+                    activeFileDiff = await this.runGit(['diff', '--', normalizedPath]);
                 }
                 catch (innerError) {
                     activeFileDiff = '';
@@ -82,7 +83,7 @@ class GitService {
         }
         let stagedDiff = '';
         try {
-            stagedDiff = await this.runGit('diff --cached');
+            stagedDiff = await this.runGit(['diff', '--cached']);
         }
         catch (error) {
             stagedDiff = '';

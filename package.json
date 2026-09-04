@@ -34,12 +34,29 @@
                 "code-review.aiProvider": {
                     "type": "string",
                     "enum": [
+                        "Antigravity",
                         "GitHub Copilot",
                         "OpenAI",
-                        "Gemini"
+                        "Gemini",
+                        "oMLX"
                     ],
-                    "default": "GitHub Copilot",
+                    "default": "Antigravity",
                     "description": "The AI provider to use for generating code reviews."
+                },
+                "code-review.antigravityModel": {
+                    "type": "string",
+                    "default": "auto",
+                    "description": "Preferred Antigravity / Gemini model family (e.g. 'auto', 'gemini-3.7-flash', 'gemini-3.1-pro', 'pro', 'flash')."
+                },
+                "code-review.antigravityEndpoint": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional custom HTTP OpenAI-compatible endpoint URL for Antigravity sidecar/daemon (leave empty to use in-editor Language Model API)."
+                },
+                "code-review.antigravityApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional API key when using a custom Antigravity HTTP endpoint."
                 },
                 "code-review.openaiApiKey": {
                     "type": "string",
@@ -51,6 +68,21 @@
                     "default": "",
                     "description": "API Key for Google Gemini. Required if AI Provider is set to Gemini."
                 },
+                "code-review.omlxBaseUrl": {
+                    "type": "string",
+                    "default": "http://127.0.0.1:8197/v1",
+                    "description": "Base URL for the oMLX provider (local LLM)."
+                },
+                "code-review.omlxModel": {
+                    "type": "string",
+                    "default": "Qwen3-1.7B-MLX-4bit",
+                    "description": "Model name to use with oMLX provider."
+                },
+                "code-review.omlxApiKey": {
+                    "type": "string",
+                    "default": "0950",
+                    "description": "API Key for oMLX provider. If left blank, 'no-key-needed' will be used."
+                },
                 "code-review.githubToken": {
                     "type": "string",
                     "default": "",
@@ -58,9 +90,6 @@
                 }
             }
         },
-        "extensionDependencies": [
-            "github.copilot-chat"
-        ],
         "viewsContainers": {
             "activitybar": [
                 {
