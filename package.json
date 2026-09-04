@@ -46,12 +46,17 @@
                 "code-review.antigravityModel": {
                     "type": "string",
                     "default": "auto",
-                    "description": "Preferred Antigravity / Gemini model family (e.g. 'auto', 'gemini-3.7-flash', 'gemini-3.1-pro', 'pro', 'flash')."
+                    "description": "Preferred Antigravity / Gemini model family (e.g. 'auto', 'gemini-3.8-flash-high', 'gemini-3.1-pro-high', 'claude-sonnet-4-6', 'pro', 'flash')."
+                },
+                "code-review.antigravityCliPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Antigravity CLI binary (agy). If left empty, it will auto-detect from ~/.local/bin or PATH."
                 },
                 "code-review.antigravityEndpoint": {
                     "type": "string",
                     "default": "",
-                    "description": "Optional custom HTTP OpenAI-compatible endpoint URL for Antigravity sidecar/daemon (leave empty to use in-editor Language Model API)."
+                    "description": "Optional custom HTTP OpenAI-compatible endpoint URL for Antigravity sidecar/daemon (leave empty to use local agy CLI or in-editor Language Model API)."
                 },
                 "code-review.antigravityApiKey": {
                     "type": "string",
@@ -131,6 +136,7 @@
         "test": "node ./out/test/runTest.js"
     },
     "devDependencies": {
+        "@types/marked": "^5.0.2",
         "@types/mocha": "^10.0.1",
         "@types/node": "16.x",
         "@types/vscode": "^1.90.0",
@@ -141,6 +147,7 @@
         "@google/generative-ai": "^0.24.1",
         "@octokit/rest": "^20.0.0",
         "axios": "^1.3.4",
+        "marked": "^18.0.11",
         "openai": "^4.0.0"
     }
 }

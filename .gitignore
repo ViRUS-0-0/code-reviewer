@@ -1,15 +1,18 @@
 # Dependencies
 node_modules/
+package-lock.json
 
 # Build and compilation output
 out/
 dist/
+*.tsbuildinfo
 
 # Extension packaging
 *.vsix
 
 # VS Code test runner
 .vscode-test/
+.vscode-test-web/
 
 # Logs
 *.log
@@ -25,6 +28,15 @@ yarn-error.log*
 # Operating System files
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# IDE and Editor
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # Test coverage
 coverage/

@@ -291,11 +291,10 @@ export class ReviewOrchestrator {
     const aiProviderName = this.aiProvider.name;
     const aiModelName = this.aiProvider.model;
 
-    // Clean markdown code blocks if present
+    // Clean outer markdown code blocks without breaking code fences inside string fields
     let cleanedReview = review.trim();
-    const codeBlockMatch = cleanedReview.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (codeBlockMatch) {
-      cleanedReview = codeBlockMatch[1].trim();
+    if (cleanedReview.startsWith('```')) {
+      cleanedReview = cleanedReview.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
     } else {
       const firstBrace = cleanedReview.indexOf('{');
       const lastBrace = cleanedReview.lastIndexOf('}');
@@ -305,7 +304,18 @@ export class ReviewOrchestrator {
     }
 
     try {
-      const parsed = JSON.parse(cleanedReview);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(cleanedReview);
+      } catch (innerErr) {
+        const first = review.indexOf('{');
+        const last = review.lastIndexOf('}');
+        if (first !== -1 && last !== -1 && last > first) {
+          parsed = JSON.parse(review.substring(first, last + 1));
+        } else {
+          throw innerErr;
+        }
+      }
       if (parsed && typeof parsed === 'object') {
         const rawVerdict = String(parsed.verdict || 'approved-with-comments').toLowerCase().replace(/_/g, '-');
         const verdict = (['approved', 'approved-with-comments', 'changes-requested'].includes(rawVerdict)

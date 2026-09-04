@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { DiffProcessor, DiffFile, TechStack } from '../services/diffProcessor';
+import { AntigravityProvider } from '../providers/antigravity';
 
 suite('DiffProcessor', () => {
   suite('parseDiff', () => {
@@ -334,3 +335,35 @@ index 7654321..fedcba9 100644
     });
   });
 });
+
+suite('AntigravityProvider', () => {
+  test('should initialize with default settings', () => {
+    const provider = new AntigravityProvider();
+    assert.strictEqual(provider.name, 'Google Antigravity');
+    assert.strictEqual(provider.model, 'auto');
+  });
+
+  test('should initialize with custom model preference', () => {
+    const provider = new AntigravityProvider({ modelPreference: 'gemini-3.1-pro-high' });
+    assert.strictEqual(provider.model, 'gemini-3.1-pro-high');
+  });
+
+  test('should map model preferences correctly', () => {
+    const provider = new AntigravityProvider() as any;
+    assert.strictEqual(provider.mapToAgyModel('pro'), 'gemini-3.1-pro-high');
+    assert.strictEqual(provider.mapToAgyModel('flash'), 'gemini-3.8-flash-high');
+    assert.strictEqual(provider.mapToAgyModel('gemini-3.8-flash'), 'gemini-3.8-flash-high');
+    assert.strictEqual(provider.mapToAgyModel('gemini-3.1-pro'), 'gemini-3.1-pro-high');
+    assert.strictEqual(provider.mapToAgyModel('claude-sonnet'), 'claude-sonnet-4-6');
+    assert.strictEqual(provider.mapToAgyModel('opus'), 'claude-opus-4-6-thinking');
+  });
+
+  test('should resolve agy CLI path when installed', () => {
+    const provider = new AntigravityProvider() as any;
+    const resolvedPath = provider.resolveAgyCliPath();
+    if (resolvedPath) {
+      assert(resolvedPath.endsWith('agy'));
+    }
+  });
+});
+

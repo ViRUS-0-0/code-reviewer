@@ -81,7 +81,7 @@ export class DiffProcessor {
   };
 
   private static readonly FRAMEWORK_PATTERNS: Record<string, RegExp> = {
-    React: /react|jsx/i,
+    React: /react|jsx|tsx/i,
     Vue: /vue/i,
     Angular: /angular/i,
     Svelte: /svelte/i,

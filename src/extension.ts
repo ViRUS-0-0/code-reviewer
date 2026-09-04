@@ -14,6 +14,43 @@ import { AntigravityProvider } from './providers/antigravity';
 
 let errorHandlersRegistered = false;
 
+function resolveAIProvider(config: vscode.WorkspaceConfiguration): AIProvider {
+	const aiProviderType = config.get<string>('aiProvider') || 'Antigravity';
+
+	if (aiProviderType === 'Antigravity') {
+		const model = config.get<string>('antigravityModel') || 'auto';
+		const endpoint = config.get<string>('antigravityEndpoint') || '';
+		const apiKey = config.get<string>('antigravityApiKey') || '';
+		const cliPath = config.get<string>('antigravityCliPath') || '';
+		return new AntigravityProvider({ modelPreference: model, endpoint, apiKey, cliPath });
+	}
+
+	if (aiProviderType === 'GitHub Copilot') {
+		return new CopilotProvider();
+	}
+
+	if (aiProviderType === 'Gemini') {
+		const apiKey = config.get<string>('geminiApiKey');
+		if (!apiKey) {
+			throw new Error('Please set your Gemini API Key in settings (code-review.geminiApiKey) or switch to GitHub Copilot.');
+		}
+		return new GeminiProvider(apiKey);
+	}
+
+	if (aiProviderType === 'oMLX') {
+		const baseUrl = config.get<string>('omlxBaseUrl') || 'http://localhost:11436/v1';
+		const model = config.get<string>('omlxModel') || 'llama3';
+		const apiKey = config.get<string>('omlxApiKey') || '';
+		return new OMLXProvider(baseUrl, model, apiKey);
+	}
+
+	const apiKey = config.get<string>('openaiApiKey');
+	if (!apiKey) {
+		throw new Error('Please set your OpenAI API Key in settings (code-review.openaiApiKey) or switch to GitHub Copilot.');
+	}
+	return new OpenAIProvider(apiKey);
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	console.log('Congratulations, your extension "code-review" is now active!');
 	const outputChannel = vscode.window.createOutputChannel('Code Review');
@@ -217,43 +254,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Get AI provider configuration
 			const config = vscode.workspace.getConfiguration('code-review');
-			const aiProviderType = config.get<string>('aiProvider') || 'Antigravity';
-
-			let provider: AIProvider;
-
-			if (aiProviderType === 'Antigravity') {
-				const model = config.get<string>('antigravityModel') || 'auto';
-				const endpoint = config.get<string>('antigravityEndpoint') || '';
-				const apiKey = config.get<string>('antigravityApiKey') || '';
-				provider = new AntigravityProvider({ modelPreference: model, endpoint, apiKey });
-			} else if (aiProviderType === 'GitHub Copilot') {
-				provider = new CopilotProvider();
-			} else if (aiProviderType === 'Gemini') {
-				const apiKey = config.get<string>('geminiApiKey');
-				if (!apiKey) {
-					vscode.window.showErrorMessage(
-						'Please set your Gemini API Key in settings (code-review.geminiApiKey) or switch to GitHub Copilot.'
-					);
-					outputChannel.appendLine('Gemini API key not configured.');
-					return;
-				}
-				provider = new GeminiProvider(apiKey);
-			} else if (aiProviderType === 'oMLX') {
-				const baseUrl = config.get<string>('omlxBaseUrl') || 'http://localhost:11436/v1';
-				const model = config.get<string>('omlxModel') || 'llama3';
-				const apiKey = config.get<string>('omlxApiKey') || '';
-				provider = new OMLXProvider(baseUrl, model, apiKey);
-			} else {
-				const apiKey = config.get<string>('openaiApiKey');
-				if (!apiKey) {
-					vscode.window.showErrorMessage(
-						'Please set your OpenAI API Key in settings (code-review.openaiApiKey) or switch to GitHub Copilot.'
-					);
-					outputChannel.appendLine('OpenAI API key not configured.');
-					return;
-				}
-				provider = new OpenAIProvider(apiKey);
-			}
+			const provider = resolveAIProvider(config);
 
 			// Get GitHub token for PR details (prompt when needed)
 			let githubToken: string | undefined;
@@ -314,35 +315,12 @@ export function activate(context: vscode.ExtensionContext) {
 			
 			// Get AI provider from config
 			const config = vscode.workspace.getConfiguration('code-review');
-			const aiProviderType = config.get<string>('aiProvider') || 'Antigravity';
 			let provider: AIProvider;
-
-			if (aiProviderType === 'Antigravity') {
-				const model = config.get<string>('antigravityModel') || 'auto';
-				const endpoint = config.get<string>('antigravityEndpoint') || '';
-				const apiKey = config.get<string>('antigravityApiKey') || '';
-				provider = new AntigravityProvider({ modelPreference: model, endpoint, apiKey });
-			} else if (aiProviderType === 'GitHub Copilot') {
-				provider = new CopilotProvider();
-			} else if (aiProviderType === 'Gemini') {
-				const apiKey = config.get<string>('geminiApiKey');
-				if (!apiKey) {
-					response.markdown('Please set your Gemini API Key in settings (`code-review.geminiApiKey`).');
-					return;
-				}
-				provider = new GeminiProvider(apiKey);
-			} else if (aiProviderType === 'oMLX') {
-				const baseUrl = config.get<string>('omlxBaseUrl') || 'http://localhost:11436/v1';
-				const model = config.get<string>('omlxModel') || 'llama3';
-				const apiKey = config.get<string>('omlxApiKey') || '';
-				provider = new OMLXProvider(baseUrl, model, apiKey);
-			} else {
-				const apiKey = config.get<string>('openaiApiKey');
-				if (!apiKey) {
-					response.markdown('Please set your OpenAI API Key in settings (`code-review.openaiApiKey`).');
-					return;
-				}
-				provider = new OpenAIProvider(apiKey);
+			try {
+				provider = resolveAIProvider(config);
+			} catch (err: any) {
+				response.markdown(err.message);
+				return;
 			}
 			
 			// Get GitHub token
