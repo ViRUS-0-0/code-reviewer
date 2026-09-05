@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import { DiffProcessor, DiffFile, TechStack } from '../services/diffProcessor';
 import { AntigravityProvider } from '../providers/antigravity';
+import { GitService } from '../services/git';
+import { ReviewOrchestrator, repairJsonString, autoCloseJson } from '../services/reviewOrchestrator';
+import { AIProvider } from '../providers/types';
 
 suite('DiffProcessor', () => {
   suite('parseDiff', () => {
@@ -364,6 +367,190 @@ suite('AntigravityProvider', () => {
     if (resolvedPath) {
       assert(resolvedPath.endsWith('agy'));
     }
+  });
+});
+
+suite('Git Remote and Repo Resolution', () => {
+  test('should parse various GitHub URL formats correctly', () => {
+    const urls = [
+      'git@github.com:fossasia/eventyay.git',
+      'git@github.com:fossasia/eventyay',
+      'https://github.com/fossasia/eventyay.git',
+      'https://github.com/fossasia/eventyay',
+      'https://user:token@github.com/fossasia/eventyay.git',
+      'ssh://git@github.com/fossasia/eventyay.git',
+    ];
+
+    const regex = /(?:github\.com[:/])([^/\s]+)\/([^/\s]+?)(?:\.git)?$/;
+
+    for (const url of urls) {
+      const match = url.trim().match(regex);
+      assert.ok(match, `Failed to match URL: ${url}`);
+      assert.strictEqual(match[1], 'fossasia', `Owner mismatch for URL: ${url}`);
+      assert.strictEqual(match[2].replace(/\.git$/, ''), 'eventyay', `Name mismatch for URL: ${url}`);
+    }
+  });
+
+  test('GitService getRemoteUrl prioritizes upstream over origin', async () => {
+    const gitService = new GitService('/tmp');
+    (gitService as any).runGit = async (cmd: string) => {
+      if (cmd === 'remote get-url upstream') {
+        return 'https://github.com/fossasia/eventyay.git\n';
+      }
+      if (cmd === 'remote get-url origin') {
+        return 'https://github.com/myfork/eventyay.git\n';
+      }
+      throw new Error('Command failed');
+    };
+
+    const url = await gitService.getRemoteUrl();
+    assert.strictEqual(url, 'https://github.com/fossasia/eventyay.git');
+  });
+
+  test('GitService getRemoteUrl falls back to origin if upstream does not exist', async () => {
+    const gitService = new GitService('/tmp');
+    (gitService as any).runGit = async (cmd: string) => {
+      if (cmd === 'remote get-url upstream') {
+        throw new Error('fatal: No such remote "upstream"');
+      }
+      if (cmd === 'remote get-url origin') {
+        return 'https://github.com/myfork/eventyay.git\n';
+      }
+      throw new Error('Command failed');
+    };
+
+    const url = await gitService.getRemoteUrl();
+    assert.strictEqual(url, 'https://github.com/myfork/eventyay.git');
+  });
+});
+
+suite('ReviewOrchestrator JSON Parsing & Repair', () => {
+  const mockAiProvider: AIProvider = {
+    name: 'Google Antigravity',
+    model: 'gemini-3.1-pro-high',
+    generateReview: async () => 'mock review'
+  };
+
+  const dummyFiles: DiffFile[] = [
+    {
+      filename: 'src/auth.ts',
+      status: 'modified',
+      additions: 10,
+      deletions: 2,
+      hunks: [],
+      importance: 0.9
+    }
+  ];
+
+  test('repairJsonString escapes literal newlines inside strings', () => {
+    const raw = '{\n  "summary": "Line 1\nLine 2"\n}';
+    const repaired = repairJsonString(raw);
+    const parsed = JSON.parse(repaired);
+    assert.strictEqual(parsed.summary, 'Line 1\nLine 2');
+  });
+
+  test('repairJsonString repairs unescaped double quotes inside currentCode and resolution', () => {
+    const raw = `{\n  "issues": [\n    {\n      "title": "Bug",\n      "currentCode": "const x = "bad";",\n      "resolution": "Use 'bad'"\n    }\n  ]\n}`;
+    const repaired = repairJsonString(raw);
+    const parsed = JSON.parse(repaired);
+    assert.strictEqual(parsed.issues[0].currentCode, 'const x = "bad";');
+  });
+
+  test('autoCloseJson closes unclosed brackets and braces in truncated JSON', () => {
+    const truncated = '{"verdict": "changes-requested", "summary": "Truncated", "issues": [{"title": "Unfinished"';
+    const closed = autoCloseJson(truncated);
+    const parsed = JSON.parse(closed);
+    assert.strictEqual(parsed.verdict, 'changes-requested');
+    assert.strictEqual(parsed.issues[0].title, 'Unfinished');
+  });
+
+  test('parseReviewResult parses clean JSON and preserves currentCode and resolution', () => {
+    const orchestrator = new ReviewOrchestrator('/tmp', mockAiProvider) as any;
+    const cleanJson = JSON.stringify({
+      verdict: 'changes-requested',
+      summary: 'Found critical issue.',
+      issues: [
+        {
+          severity: 'high',
+          title: 'Null pointer risk',
+          description: 'Token may be null',
+          file: 'src/auth.ts',
+          line: 42,
+          currentCode: 'return user.token.trim();',
+          resolution: 'Add optional chaining',
+          updatedCode: 'return user.token?.trim();'
+        }
+      ],
+      fileBreakdown: []
+    });
+
+    const result = orchestrator.parseReviewResult(cleanJson, dummyFiles);
+    assert.strictEqual(result.verdict, 'changes-requested');
+    assert.strictEqual(result.issues.length, 1);
+    assert.strictEqual(result.issues[0].title, 'Null pointer risk');
+    assert.strictEqual(result.issues[0].currentCode, 'return user.token.trim();');
+    assert.strictEqual(result.issues[0].resolution, 'Add optional chaining');
+    assert.strictEqual(result.issues[0].updatedCode, 'return user.token?.trim();');
+  });
+
+  test('parseReviewResult recovers from malformed JSON with unescaped newlines and quotes', () => {
+    const orchestrator = new ReviewOrchestrator('/tmp', mockAiProvider) as any;
+    // Malformed JSON with raw newlines inside currentCode
+    const malformed = `\`\`\`json
+{
+  "verdict": "changes-requested",
+  "summary": "Executive overview of changes.",
+  "issues": [
+    {
+      "severity": "critical",
+      "title": "SQL Injection",
+      "description": "Unsanitized user input",
+      "file": "src/auth.ts",
+      "line": 88,
+      "currentCode": "db.query("SELECT * FROM users WHERE id = " + id);",
+      "resolution": "Use parameterized query",
+      "updatedCode": "db.query('SELECT * FROM users WHERE id = $1', [id]);"
+    }
+  ]
+}
+\`\`\``;
+
+    const result = orchestrator.parseReviewResult(malformed, dummyFiles);
+    assert.strictEqual(result.verdict, 'changes-requested');
+    assert.strictEqual(result.summary, 'Executive overview of changes.');
+    assert.strictEqual(result.issues.length, 1);
+    assert.strictEqual(result.issues[0].title, 'SQL Injection');
+    assert.strictEqual(result.issues[0].severity, 'critical');
+    assert.strictEqual(result.issues[0].file, 'src/auth.ts');
+    assert.strictEqual(result.issues[0].line, 88);
+    assert.ok(result.issues[0].currentCode);
+    assert.ok(result.issues[0].resolution);
+  });
+
+  test('parseReviewText does NOT extract JSON syntax as issue titles', () => {
+    const orchestrator = new ReviewOrchestrator('/tmp', mockAiProvider) as any;
+    const jsonWithExtra = `Some preface text
+{
+  "verdict": "approved-with-comments",
+  "summary": "A clean summary here.",
+  "issues": [
+    {
+      "severity": "medium",
+      "title": "Missing validation",
+      "file": "src/auth.ts",
+      "line": 12,
+      "currentCode": "validate()",
+      "resolution": "check errors"
+    }
+  ]
+}`;
+
+    const result = orchestrator.parseReviewResult(jsonWithExtra, dummyFiles);
+    assert.strictEqual(result.verdict, 'approved-with-comments');
+    assert.strictEqual(result.summary, 'A clean summary here.');
+    assert.strictEqual(result.issues.length, 1);
+    assert.strictEqual(result.issues[0].title, 'Missing validation');
+    assert.notStrictEqual(result.issues[0].title, '"summary": "A clean summary here."');
   });
 });
 

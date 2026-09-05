@@ -108,7 +108,16 @@ export class GitService {
   }
 
   async getDiffForBranch(branch: string): Promise<string> {
-    const bases = ['main', 'master', 'develop', 'origin/main', 'origin/master'];
+    const bases = [
+      'main',
+      'master',
+      'develop',
+      'upstream/main',
+      'upstream/master',
+      'upstream/develop',
+      'origin/main',
+      'origin/master'
+    ];
     let lastError: Error | undefined;
 
     // Try each base branch with triple-dot syntax
@@ -155,7 +164,26 @@ export class GitService {
     }
   }
 
-  async getRemoteUrl(): Promise<string> {
+  async getRemoteUrl(remoteName?: string): Promise<string> {
+    if (remoteName) {
+      try {
+        const url = await this.runGit(`remote get-url ${remoteName}`);
+        return url.trim();
+      } catch (error) {
+        return '';
+      }
+    }
+
+    // Prioritize upstream with origin as fallback
+    try {
+      const upstreamUrl = await this.runGit('remote get-url upstream');
+      if (upstreamUrl && upstreamUrl.trim().length > 0) {
+        return upstreamUrl.trim();
+      }
+    } catch (error) {
+      // Upstream not configured, fall back to origin
+    }
+
     try {
       const url = await this.runGit('remote get-url origin');
       return url.trim();

@@ -35,6 +35,18 @@ interface RepoInfo {
   name: string;
 }
 
+function parseGitHubRepo(url: string): RepoInfo | null {
+  if (!url) return null;
+  const match = url.trim().match(/(?:github\.com[:/])([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
+  if (match) {
+    return {
+      owner: match[1],
+      name: match[2].replace(/\.git$/, ''),
+    };
+  }
+  return null;
+}
+
 export class PRSelectionPanel implements vscode.WebviewViewProvider {
   public static readonly viewType = 'code-review-pr-selection';
   private _view?: vscode.WebviewView;
@@ -187,22 +199,62 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
 
   private async _getRepoInfo(): Promise<RepoInfo> {
     try {
+      // 1. Prioritize git remote get-url upstream
+      try {
+        const upstreamUrl = (await runCommand('git remote get-url upstream', this._workspaceRoot)).trim();
+        const parsed = parseGitHubRepo(upstreamUrl);
+        if (parsed) {
+          return parsed;
+        }
+      } catch (e) {
+        // upstream remote does not exist or failed, continue to origin
+      }
+
+      // 2. Fallback to git remote get-url origin
+      try {
+        const originUrl = (await runCommand('git remote get-url origin', this._workspaceRoot)).trim();
+        const parsed = parseGitHubRepo(originUrl);
+        if (parsed) {
+          return parsed;
+        }
+      } catch (e) {
+        // origin remote does not exist or failed
+      }
+
+      // 3. Fallback to reading .git/config
       const configPath = path.join(this._workspaceRoot, '.git', 'config');
-      if (!fs.existsSync(configPath)) {
-        throw new Error('Not a git repository');
+      if (fs.existsSync(configPath)) {
+        const configContent = fs.readFileSync(configPath, 'utf-8');
+
+        // Check for [remote "upstream"] section first
+        const upstreamMatch = configContent.match(/\[remote\s+"upstream"\][^\[]*?url\s*=\s*(.+?)(?:\r?\n|$)/m);
+        if (upstreamMatch) {
+          const parsed = parseGitHubRepo(upstreamMatch[1]);
+          if (parsed) {
+            return parsed;
+          }
+        }
+
+        // Check for [remote "origin"] section next
+        const originMatch = configContent.match(/\[remote\s+"origin"\][^\[]*?url\s*=\s*(.+?)(?:\r?\n|$)/m);
+        if (originMatch) {
+          const parsed = parseGitHubRepo(originMatch[1]);
+          if (parsed) {
+            return parsed;
+          }
+        }
+
+        // Fallback: any GitHub url in config
+        const anyUrlMatch = configContent.match(/url\s*=\s*(.+?)(?:\r?\n|$)/m);
+        if (anyUrlMatch) {
+          const parsed = parseGitHubRepo(anyUrlMatch[1]);
+          if (parsed) {
+            return parsed;
+          }
+        }
       }
 
-      const configContent = fs.readFileSync(configPath, 'utf-8');
-      const urlMatch = configContent.match(/url\s*=\s*(?:git@github\.com:|https:\/\/github\.com\/)([^/]+)\/(.+?)(?:\.git)?$/m);
-
-      if (!urlMatch) {
-        throw new Error('Could not parse GitHub repository from .git/config');
-      }
-
-      return {
-        owner: urlMatch[1],
-        name: urlMatch[2].replace(/\.git$/, ''),
-      };
+      throw new Error('Could not parse GitHub repository from upstream or origin remotes');
     } catch (error: any) {
       throw new Error(`Failed to get repo info: ${error.message}`);
     }
@@ -217,7 +269,7 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('*'))
-        .map((line) => line.replace(/^remotes\/origin\//, ''))
+        .map((line) => line.replace(/^remotes\/(?:origin|upstream)\//, ''))
         .filter((value, index, self) => self.indexOf(value) === index) // Remove duplicates
         .sort();
 
@@ -648,12 +700,35 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     let selectedOption = null;
     let selectedPR = null;
+    let prDebounceTimer = null;
 
     const optionGroups = document.querySelectorAll('.option-group');
     const reviewBtn = document.getElementById('review-btn');
     const refreshBtn = document.getElementById('refresh-btn');
     const cancelBtn = document.getElementById('cancel-btn');
     const messageContainer = document.getElementById('message-container');
+
+    const prRepoInput = document.getElementById('pr-repo');
+    const prNumberInput = document.getElementById('pr-number');
+    const currentBranchInput = document.getElementById('current-branch');
+    const compareBaseInput = document.getElementById('compare-base');
+    const compareHeadInput = document.getElementById('compare-head');
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function isRepoValid(repo) {
+      if (!repo) return false;
+      const parts = repo.trim().split('/');
+      return parts.length === 2 && parts[0].trim().length > 0 && parts[1].trim().length > 0;
+    }
 
     // Initialize
     initializePanel();
@@ -676,12 +751,13 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
         optionGroups.forEach((g) => g.classList.remove('selected'));
         group.classList.add('selected');
         selectedOption = group.dataset.option;
-        selectedPR = null;
         updateReviewButton();
 
         // Load data based on selected option
         if (selectedOption === 'pr') {
-          loadPRs();
+          if (isRepoValid(prRepoInput.value.trim())) {
+            loadPRs();
+          }
         } else if (selectedOption === 'compare') {
           loadBranches();
         }
@@ -690,13 +766,49 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
 
     // PR list item selection
     document.addEventListener('click', (e) => {
-      if (e.target.closest('.pr-item')) {
-        const prItem = e.target.closest('.pr-item');
+      const prItem = e.target.closest('.pr-item');
+      if (prItem) {
         document.querySelectorAll('.pr-item').forEach((item) => item.classList.remove('selected'));
         prItem.classList.add('selected');
         selectedPR = prItem.dataset.prNumber;
+        prNumberInput.value = selectedPR;
         updateReviewButton();
       }
+    });
+
+    // PR Number input listener
+    prNumberInput.addEventListener('input', () => {
+      const val = prNumberInput.value.trim();
+      selectedPR = val || null;
+      document.querySelectorAll('.pr-item').forEach((item) => {
+        if (val && item.dataset.prNumber === val) {
+          item.classList.add('selected');
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+      updateReviewButton();
+    });
+
+    // PR Repo input listener (debounced reload of recent PRs)
+    prRepoInput.addEventListener('input', () => {
+      updateReviewButton();
+      clearTimeout(prDebounceTimer);
+      prDebounceTimer = setTimeout(() => {
+        const repo = prRepoInput.value.trim();
+        if (isRepoValid(repo)) {
+          loadPRs();
+        }
+      }, 600);
+    });
+
+    prRepoInput.addEventListener('change', () => {
+      clearTimeout(prDebounceTimer);
+      const repo = prRepoInput.value.trim();
+      if (isRepoValid(repo)) {
+        loadPRs();
+      }
+      updateReviewButton();
     });
 
     // Review button
@@ -707,30 +819,34 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
         vscode.postMessage({
           type: 'selectSource',
           sourceType: 'branch',
-          sourceData: { branch: document.getElementById('current-branch').value },
+          sourceData: { branch: currentBranchInput.value.trim() },
         });
-      } else if (selectedOption === 'pr' && selectedPR) {
-        vscode.postMessage({
-          type: 'selectSource',
-          sourceType: 'pr',
-          sourceData: {
-            repo: document.getElementById('pr-repo').value,
-            prNumber: parseInt(selectedPR),
-          },
-        });
+      } else if (selectedOption === 'pr') {
+        const repo = prRepoInput.value.trim();
+        const prNumber = parseInt(prNumberInput.value.trim(), 10);
+        if (isRepoValid(repo) && !isNaN(prNumber) && prNumber > 0) {
+          vscode.postMessage({
+            type: 'selectSource',
+            sourceType: 'pr',
+            sourceData: {
+              repo: repo,
+              prNumber: prNumber,
+            },
+          });
+        }
       } else if (selectedOption === 'compare') {
         vscode.postMessage({
           type: 'selectSource',
           sourceType: 'compare',
           sourceData: {
-            base: document.getElementById('compare-base').value,
-            head: document.getElementById('compare-head').value,
+            base: compareBaseInput.value.trim(),
+            head: compareHeadInput.value.trim(),
           },
         });
       }
-      // Re-enable after a short delay
+      // Re-evaluate button state after a short delay
       setTimeout(() => {
-        reviewBtn.disabled = false;
+        updateReviewButton();
         reviewBtn.textContent = 'Start Review';
       }, 2000);
     });
@@ -744,15 +860,13 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
       const message = event.data;
       switch (message.type) {
         case 'repoInfo':
-          document.getElementById('pr-repo').value = \`\${message.data.owner}/\${message.data.name}\`;
-          vscode.postMessage({
-            type: 'getPRs',
-            repoOwner: message.data.owner,
-            repoName: message.data.name,
-          });
+          prRepoInput.value = message.data.owner + '/' + message.data.name;
+          updateReviewButton();
+          loadPRs();
           break;
         case 'currentBranch':
-          document.getElementById('current-branch').value = message.branch;
+          currentBranchInput.value = message.branch;
+          updateReviewButton();
           break;
         case 'prs':
           renderPRList(message.data);
@@ -765,30 +879,36 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
           break;
         case 'error':
           showError(message.message);
+          const prList = document.getElementById('pr-list');
+          if (prList && prList.querySelector('.loading')) {
+            prList.innerHTML = '<div style="font-size: 12px; opacity: 0.6; padding: 6px 0;">Could not load recent PRs. You can enter a PR number manually above.</div>';
+          }
           break;
       }
     });
 
     function loadPRs() {
-      const repo = document.getElementById('pr-repo').value;
-      if (repo) {
+      const repo = prRepoInput.value.trim();
+      if (isRepoValid(repo)) {
         const [owner, name] = repo.split('/');
+        const prList = document.getElementById('pr-list');
+        prList.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading pull requests...</span></div>';
         vscode.postMessage({
           type: 'getPRs',
-          repoOwner: owner,
-          repoName: name,
+          repoOwner: owner.trim(),
+          repoName: name.trim(),
         });
       }
     }
 
     function loadBranches() {
-      const repo = document.getElementById('pr-repo').value;
-      if (repo) {
+      const repo = prRepoInput.value.trim();
+      if (isRepoValid(repo)) {
         const [owner, name] = repo.split('/');
         vscode.postMessage({
           type: 'getBranches',
-          repoOwner: owner,
-          repoName: name,
+          repoOwner: owner.trim(),
+          repoName: name.trim(),
         });
       }
     }
@@ -796,33 +916,42 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
     function renderPRList(prs) {
       const prList = document.getElementById('pr-list');
       prList.innerHTML = '';
+      if (!prs || prs.length === 0) {
+        prList.innerHTML = '<div style="font-size: 12px; opacity: 0.6; padding: 6px 0;">No open PRs found. You can enter a PR number manually above.</div>';
+        return;
+      }
+      const currentPR = prNumberInput.value.trim();
       prs.forEach((pr) => {
+        const isCurrent = currentPR && String(pr.number) === currentPR;
         const item = document.createElement('div');
-        item.className = 'pr-item';
+        item.className = 'pr-item' + (isCurrent ? ' selected' : '');
         item.dataset.prNumber = pr.number;
-        item.innerHTML = \`
-          <div class="pr-number">#\${pr.number}</div>
-          <div class="pr-title">\${pr.title}</div>
-          <div class="pr-meta">by \${pr.author} • \${new Date(pr.createdAt).toLocaleDateString()}</div>
-        \`;
+        item.innerHTML =
+          '<div class="pr-number">#' + escapeHtml(String(pr.number)) + '</div>' +
+          '<div class="pr-title">' + escapeHtml(pr.title || '') + '</div>' +
+          '<div class="pr-meta">by ' + escapeHtml(pr.author || 'unknown') + ' • ' + new Date(pr.createdAt).toLocaleDateString() + '</div>';
         prList.appendChild(item);
       });
     }
 
     function renderBranchList(branches) {
-      // Populate branch inputs with autocomplete
-      const baseInput = document.getElementById('compare-base');
-      const headInput = document.getElementById('compare-head');
-      // Simple implementation - could be enhanced with autocomplete
+      // Branch autocomplete / selection support
     }
 
     function updateReviewButton() {
-      const isValid =
-        (selectedOption === 'branch') ||
-        (selectedOption === 'pr' && selectedPR) ||
-        (selectedOption === 'compare' &&
-          document.getElementById('compare-base').value &&
-          document.getElementById('compare-head').value);
+      let isValid = false;
+
+      if (selectedOption === 'branch') {
+        isValid = Boolean(currentBranchInput.value && currentBranchInput.value.trim().length > 0);
+      } else if (selectedOption === 'pr') {
+        const repo = prRepoInput.value.trim();
+        const prNumVal = prNumberInput.value.trim();
+        const prNum = parseInt(prNumVal, 10);
+        isValid = isRepoValid(repo) && !isNaN(prNum) && prNum > 0;
+      } else if (selectedOption === 'compare') {
+        isValid = Boolean(compareBaseInput.value.trim() && compareHeadInput.value.trim());
+      }
+
       reviewBtn.disabled = !isValid;
     }
 
@@ -845,10 +974,11 @@ export class PRSelectionPanel implements vscode.WebviewViewProvider {
     }
 
     // Input validation
-    document.getElementById('compare-base').addEventListener('input', updateReviewButton);
-    document.getElementById('compare-head').addEventListener('input', updateReviewButton);
+    compareBaseInput.addEventListener('input', updateReviewButton);
+    compareHeadInput.addEventListener('input', updateReviewButton);
   </script>
 </body>
 </html>`;
   }
 }
+

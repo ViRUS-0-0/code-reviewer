@@ -133,9 +133,9 @@ export function activate(context: vscode.ExtensionContext) {
 			let defaultRepo = 'owner/repo';
 			try {
 				const remoteUrl = await gitService.getRemoteUrl();
-				const match = remoteUrl.match(/github\.com[:\/](.*)\.git/);
+				const match = remoteUrl.match(/(?:github\.com[:/])([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
 				if (match) {
-					defaultRepo = match[1];
+					defaultRepo = `${match[1]}/${match[2]}`;
 				}
 			} catch (e) {}
 

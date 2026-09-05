@@ -4,7 +4,7 @@ import { GitService } from './git';
 import { GitHubService, PRDetails as GitHubPRDetails } from './githubService';
 import { DiffProcessor, DiffFile, DiffHunk } from './diffProcessor';
 import { PromptManager, ParsedFile, PRDetails, Issue } from './promptManager';
-import { ReviewResult } from '../webview/sidebarProvider';
+import { ReviewResult, ReviewIssue, FileReview } from '../webview/sidebarProvider';
 
 /**
  * Source type for review
@@ -32,6 +32,93 @@ export interface ReviewOptions {
   maxTokens?: number;
   includeFileBreakdown?: boolean;
   parseStructuredResult?: boolean;
+}
+
+export function repairJsonString(raw: string): string {
+  // 1. Repair unescaped quotes inside known string property values
+  const repaired = raw.replace(
+    /"(currentCode|snippet|updatedCode|resolution|description|title|summary|copyableSummary)":\s*"([\s\S]*?)"(?=\s*,\s*"[a-zA-Z_]+":|\s*,\s*\}|\s*\}|\s*,\s*\{)/g,
+    (_match, key, val) => {
+      const escapedVal = val.replace(/(?<!\\)"/g, '\\"');
+      return `"${key}": "${escapedVal}"`;
+    }
+  );
+
+  // 2. Escape literal unescaped control characters inside quoted string literals
+  let inString = false;
+  let escaped = false;
+  let out = '';
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        out += ch;
+      } else if (ch === '\\') {
+        escaped = true;
+        out += ch;
+      } else if (ch === '"') {
+        inString = false;
+        out += ch;
+      } else if (ch === '\n') {
+        out += '\\n';
+      } else if (ch === '\r') {
+        out += '\\r';
+      } else if (ch === '\t') {
+        out += '\\t';
+      } else {
+        out += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inString = true;
+      }
+      out += ch;
+    }
+  }
+
+  // 3. Strip trailing commas before closing braces or brackets
+  out = out.replace(/,\s*([}\]])/g, '$1');
+
+  return out;
+}
+
+export function autoCloseJson(str: string): string {
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else {
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '{' || ch === '[') {
+        stack.push(ch);
+      } else if (ch === '}' && stack[stack.length - 1] === '{') {
+        stack.pop();
+      } else if (ch === ']' && stack[stack.length - 1] === '[') {
+        stack.pop();
+      }
+    }
+  }
+
+  let res = str;
+  if (inString) res += '"';
+  res = res.replace(/,\s*$/, '');
+  while (stack.length > 0) {
+    const top = stack.pop();
+    res += top === '{' ? '}' : ']';
+  }
+  return res;
 }
 
 /**
@@ -291,31 +378,55 @@ export class ReviewOrchestrator {
     const aiProviderName = this.aiProvider.name;
     const aiModelName = this.aiProvider.model;
 
-    // Clean outer markdown code blocks without breaking code fences inside string fields
-    let cleanedReview = review.trim();
-    if (cleanedReview.startsWith('```')) {
-      cleanedReview = cleanedReview.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
-    } else {
-      const firstBrace = cleanedReview.indexOf('{');
-      const lastBrace = cleanedReview.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleanedReview = cleanedReview.substring(firstBrace, lastBrace + 1);
-      }
-    }
+    const hasJsonIndicators =
+      review.includes('"verdict"') ||
+      review.includes('"issues"') ||
+      review.includes('"summary"') ||
+      review.trim().startsWith('{');
 
-    try {
-      let parsed: any;
-      try {
-        parsed = JSON.parse(cleanedReview);
-      } catch (innerErr) {
-        const first = review.indexOf('{');
-        const last = review.lastIndexOf('}');
-        if (first !== -1 && last !== -1 && last > first) {
-          parsed = JSON.parse(review.substring(first, last + 1));
-        } else {
-          throw innerErr;
+    if (hasJsonIndicators) {
+      // Clean outer markdown code blocks without breaking code fences inside string fields
+      let cleanedReview = review.trim();
+      const codeBlockMatch = cleanedReview.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (codeBlockMatch) {
+        cleanedReview = codeBlockMatch[1].trim();
+      } else {
+        const firstBrace = cleanedReview.indexOf('{');
+        const lastBrace = cleanedReview.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          cleanedReview = cleanedReview.substring(firstBrace, lastBrace + 1);
         }
       }
+
+      let parsed: any;
+
+      // Strategy 1: Direct JSON.parse
+      try {
+        parsed = JSON.parse(cleanedReview);
+      } catch (err1) {
+        // Strategy 2: Repaired & Sanitized JSON.parse
+        try {
+          parsed = JSON.parse(repairJsonString(cleanedReview));
+        } catch (err2) {
+          // Strategy 3: Auto-closed and repaired JSON.parse
+          try {
+            parsed = JSON.parse(autoCloseJson(repairJsonString(cleanedReview)));
+          } catch (err3) {
+            // Strategy 4: Raw review boundaries with auto-closing
+            try {
+              const first = review.indexOf('{');
+              const last = review.lastIndexOf('}');
+              if (first !== -1 && last !== -1 && last > first) {
+                const sub = review.substring(first, last + 1);
+                parsed = JSON.parse(autoCloseJson(repairJsonString(sub)));
+              }
+            } catch (err4) {
+              // Ignore and fall through to regex extractor
+            }
+          }
+        }
+      }
+
       if (parsed && typeof parsed === 'object') {
         const rawVerdict = String(parsed.verdict || 'approved-with-comments').toLowerCase().replace(/_/g, '-');
         const verdict = (['approved', 'approved-with-comments', 'changes-requested'].includes(rawVerdict)
@@ -348,7 +459,7 @@ export class ReviewOrchestrator {
         // Backfill missing files in fileBreakdown from diffFiles
         const aiFiles = new Set(parsed.fileBreakdown.map((f: any) => f.filename));
         const missingFiles = diffFiles.filter(df => !aiFiles.has(df.filename));
-        
+
         if (missingFiles.length > 0) {
           const extraBreakdown = missingFiles.map(df => ({
             filename: df.filename,
@@ -365,8 +476,13 @@ export class ReviewOrchestrator {
 
         return parsed as ReviewResult;
       }
-    } catch (error) {
-      console.warn('Failed to parse JSON from review, proceeding with text fallback:', error);
+
+      // Strategy 5: Robust regex extraction from JSON text
+      console.warn('JSON.parse failed on review output, recovering fields with regex JSON extractor');
+      const extracted = this.extractReviewFromJsonText(review, diffFiles);
+      extracted.aiProvider = aiProviderName;
+      extracted.aiModel = aiModelName;
+      return extracted;
     }
 
     // Fallback: parse review text to extract verdict and issues
@@ -375,6 +491,107 @@ export class ReviewOrchestrator {
     fallbackResult.aiModel = aiModelName;
     fallbackResult.copyableSummary = this.generateCopyableSummary(fallbackResult);
     return fallbackResult;
+  }
+
+  /**
+   * Robust regex-based fallback extractor for JSON output
+   */
+  private extractReviewFromJsonText(text: string, diffFiles: DiffFile[]): ReviewResult {
+    let verdict: 'approved' | 'approved-with-comments' | 'changes-requested' = 'approved-with-comments';
+    const verdictMatch = text.match(/"verdict"\s*:\s*"([^"]+)"/i);
+    if (verdictMatch) {
+      const raw = verdictMatch[1].toLowerCase().replace(/_/g, '-');
+      if (['approved', 'approved-with-comments', 'changes-requested'].includes(raw)) {
+        verdict = raw as any;
+      } else if (raw.includes('change') || raw.includes('reject')) {
+        verdict = 'changes-requested';
+      } else {
+        verdict = 'approved';
+      }
+    }
+
+    let summary = '';
+    const summaryMatch = text.match(/"summary"\s*:\s*"([\s\S]*?)"(?=\s*,\s*"(?:issues|copyableSummary|fileBreakdown)")/);
+    if (summaryMatch) {
+      summary = summaryMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    } else {
+      const simpleSummary = text.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (simpleSummary) {
+        summary = simpleSummary[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+      }
+    }
+
+    let copyableSummary = '';
+    const copyMatch = text.match(/"copyableSummary"\s*:\s*"([\s\S]*?)"(?=\s*,\s*"(?:issues|summary|fileBreakdown)")/);
+    if (copyMatch) {
+      copyableSummary = copyMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    }
+
+    const issues: ReviewIssue[] = [];
+    const issueBlockRegex = /\{[\s\S]*?(?=\}\s*,\s*\{|\}\s*\]|\}\s*$)/g;
+    const issuesSection = text.match(/"issues"\s*:\s*\[([\s\S]*)/);
+    const issuesText = issuesSection ? issuesSection[1] : text;
+
+    let match: RegExpExecArray | null;
+    while ((match = issueBlockRegex.exec(issuesText)) !== null) {
+      const block = match[0] + '}';
+      const getField = (field: string): string | undefined => {
+        const m = block.match(new RegExp(`"${field}"\\s*:\\s*"([\\s\\S]*?)"(?=\\s*,\\s*"[a-zA-Z_]+"|\\s*\\})`));
+        if (m) {
+          return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        }
+        return undefined;
+      };
+
+      const title = getField('title');
+      if (!title || title.trim().length === 0) continue;
+
+      const rawSeverity = (getField('severity') || 'medium').toLowerCase();
+      const severity: 'critical' | 'high' | 'medium' | 'low' =
+        (['critical', 'high', 'medium', 'low'].includes(rawSeverity) ? rawSeverity : 'medium') as any;
+
+      const description = getField('description') || title;
+      const file = getField('file');
+      const lineMatch = block.match(/"line"\s*:\s*(\d+)/);
+      const line = lineMatch ? parseInt(lineMatch[1], 10) : undefined;
+      const currentCode = getField('currentCode') || getField('snippet');
+      const resolution = getField('resolution');
+      const updatedCode = getField('updatedCode');
+
+      issues.push({
+        severity,
+        title,
+        description,
+        file,
+        line,
+        snippet: currentCode,
+        currentCode,
+        resolution,
+        updatedCode
+      });
+    }
+
+    const fileBreakdown: FileReview[] = diffFiles.map(df => ({
+      filename: df.filename,
+      status: (df.status === 'renamed' ? 'modified' : df.status) as any,
+      summary: `Analyzed ${df.filename} (+${df.additions}/-${df.deletions})`
+    }));
+
+    const result: ReviewResult = {
+      verdict,
+      summary: summary || 'Completed automated code review.',
+      copyableSummary,
+      issues,
+      fileBreakdown,
+      aiProvider: this.aiProvider.name,
+      aiModel: this.aiProvider.model
+    };
+
+    if (!result.copyableSummary || result.copyableSummary.trim().length === 0) {
+      result.copyableSummary = this.generateCopyableSummary(result);
+    }
+
+    return result;
   }
 
   /**
@@ -417,6 +634,11 @@ export class ReviewOrchestrator {
    * Parse review text to extract structured information
    */
   private parseReviewText(review: string, diffFiles: DiffFile[]): ReviewResult {
+    // If the review appears to contain JSON, delegate to JSON recovery
+    if (review.includes('"verdict"') || review.includes('"issues"') || review.trim().startsWith('{')) {
+      return this.extractReviewFromJsonText(review, diffFiles);
+    }
+
     // Determine verdict based on keywords
     let verdict: 'approved' | 'approved-with-comments' | 'changes-requested' = 'approved-with-comments';
 
@@ -519,7 +741,7 @@ export class ReviewOrchestrator {
       });
     }
 
-    // If structured blocks were not found, fall back to line matching
+    // If structured blocks were not found, fall back to line matching (only for genuine plain text)
     if (issues.length === 0) {
       const severityPatterns = [
         { pattern: /critical|security|vulnerability/gi, severity: 'critical' as const },
@@ -530,6 +752,11 @@ export class ReviewOrchestrator {
 
       const lines = review.split('\n');
       for (const line of lines) {
+        // Skip JSON syntax lines
+        if (/^\s*["{}\[\],]/.test(line) || /^\s*"[a-zA-Z_]+"\s*:/.test(line)) {
+          continue;
+        }
+
         for (const { pattern, severity } of severityPatterns) {
           if (pattern.test(line) && line.trim().length > 10) {
             issues.push({
