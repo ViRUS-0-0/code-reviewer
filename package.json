@@ -3,6 +3,8 @@
     "displayName": "Code Review AI",
     "description": "AI-powered code review and knowledge indexing",
     "version": "0.0.3",
+    "publisher": "ViRUS-0-0",
+    "icon": "media/icon.png",
     "license": "MIT",
     "repository": {
         "type": "git",
